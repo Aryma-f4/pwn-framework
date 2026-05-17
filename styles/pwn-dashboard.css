@@ -2,7 +2,7 @@
 
 @layer base {
   .pwn-container {
-    @apply h-screen bg-zinc-950 text-gray-100 flex overflow-hidden;
+    @apply h-screen bg-zinc-950 text-gray-100 flex flex-col;
     background-image: 
       repeating-linear-gradient(0deg, rgba(15, 23, 42, 0.3) 0px, rgba(15, 23, 42, 0.3) 1px, transparent 1px, transparent 2px),
       repeating-linear-gradient(90deg, rgba(15, 23, 42, 0.3) 0px, rgba(15, 23, 42, 0.3) 1px, transparent 1px, transparent 2px);
