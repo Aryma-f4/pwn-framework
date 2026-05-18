@@ -7,6 +7,7 @@ import { PwnTreeCanvas } from '@/components/pwn-tree-canvas';
 import { PwnSidebar } from '@/components/pwn-sidebar';
 import { PwnInspector } from '@/components/pwn-inspector';
 import { KeyboardHelpModal } from '@/components/keyboard-help-modal';
+import { ResizablePanel } from '@/components/resizable-panel';
 import '@/styles/pwn-dashboard.css';
 
 export default function PwnExploitationDashboard() {
@@ -99,7 +100,14 @@ export default function PwnExploitationDashboard() {
           filteredTechniques={filteredTechniques}
         />
 
-        <PwnInspector selectedNode={selectedNode} />
+        <ResizablePanel 
+          initialWidth={420}
+          minWidth={300}
+          maxWidth={700}
+          position="right"
+        >
+          <PwnInspector selectedNode={selectedNode} />
+        </ResizablePanel>
       </div>
 
         {/* Footer with GitHub Credit */}
