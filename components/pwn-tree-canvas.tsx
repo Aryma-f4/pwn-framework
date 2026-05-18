@@ -96,6 +96,11 @@ export function PwnTreeCanvas({
         return isHighlighted ? 3 : 2;
       });
 
+    // Helper function to truncate text
+    const truncateText = (text: string, maxLength: number = 12): string => {
+      return text.length > maxLength ? text.substring(0, maxLength - 1) + '…' : text;
+    };
+
     // Draw nodes
     const nodes = root.descendants();
     const nodeGroups = g
@@ -147,6 +152,8 @@ export function PwnTreeCanvas({
         return d.data.category === 'root' ? '12px' : '10px';
       })
       .style('opacity', (d: any) => getNodeOpacity(d.data.id, searchMatches, pathHighlight))
+      .text((d: any) => truncateText(d.data.name, 12))
+      .append('title')
       .text((d: any) => d.data.name);
 
     // Highlight selected node
