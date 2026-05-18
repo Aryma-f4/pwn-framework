@@ -1,20 +1,44 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Copy, Check, ExternalLink, Github, BookOpen } from 'lucide-react';
 import { Technique } from '@/lib/pwn-data';
 import { getTechniqueKB, enrichedTechnique } from '@/lib/pwn-unified-data';
 import { getHeapReferenceForTechnique } from '@/lib/heap-reference-mapping';
+import { InteractiveChecklist } from './interactive-checklist';
+import { SessionManager } from './session-manager';
+import { useSessions, ChecklistItem } from '@/lib/use-sessions';
 
 interface PwnInspectorProps {
   selectedNode: Technique | null;
 }
 
-type TabType = 'overview' | 'prerequisites' | 'constraints' | 'blueprint' | 'precond' | 'exploits' | 'checklist' | 'refs' | 'heap' | 'resources';
+type TabType = 'overview' | 'prerequisites' | 'constraints' | 'blueprint' | 'precond' | 'exploits' | 'checklist' | 'refs' | 'heap' | 'resources' | 'sessions';
 
 export function PwnInspector({ selectedNode }: PwnInspectorProps) {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [copiedTab, setCopiedTab] = useState<string | null>(null);
+  const { sessions, activeSessionId, setActiveSessionId, createSession, deleteSession, renameSession, updateChecklistItem, setChecklist, getActiveSession, isLoaded } = useSessions();
+  
+  // Initialize session when technique changes
+  useEffect(() => {
+    if (selectedNode && selectedNode.id !== 'root' && isLoaded) {
+      const activeSession = getActiveSession();
+      // If no session or different technique, create one
+      if (!activeSession || activeSession.technique !== selectedNode.id) {
+        const defaultChecklist: ChecklistItem[] = [];
+        if (getTechniqueKB(selectedNode.id)?.operatorChecklist) {
+          const kb = getTechniqueKB(selectedNode.id);
+          defaultChecklist.push(...kb.operatorChecklist.map((text: string, idx: number) => ({
+            id: `item_${idx}`,
+            text: text.substring(5).trim(),
+            completed: false,
+          })));
+        }
+        createSession(selectedNode.name, defaultChecklist);
+      }
+    }
+  }, [selectedNode?.id, isLoaded]);
 
   if (!selectedNode || selectedNode.id === 'root') {
     return (
@@ -152,20 +176,38 @@ export function PwnInspector({ selectedNode }: PwnInspectorProps) {
             </div>
           );
 
-        case 'checklist':
+        case 'checklist': {
+          const activeSession = getActiveSession();
           return (
-            <div className="pwn-section">
-              <p className="text-xs text-cyan-400 font-mono mb-3">OPERATOR WORKFLOW</p>
-              <ul className="space-y-1">
-                {kbEntry.operatorChecklist.map((item, idx) => (
-                  <li key={idx} className="text-gray-300 text-xs flex gap-2">
-                    <span className="text-gray-500">{item.substring(0, 5)}</span>
-                    <span>{item.substring(5)}</span>
-                  </li>
-                ))}
-              </ul>
+            <div className="pwn-section space-y-4">
+              <div>
+                <p className="text-xs text-cyan-400 font-mono mb-2">OPERATOR WORKFLOW</p>
+                {activeSession && (
+                  <InteractiveChecklist
+                    items={activeSession.checklist}
+                    onItemToggle={(itemId, completed) => updateChecklistItem(activeSession.id, itemId, completed)}
+                    onItemAdd={(text) => {
+                      const newItem: ChecklistItem = {
+                        id: `item_${Date.now()}`,
+                        text,
+                        completed: false,
+                      };
+                      setChecklist(activeSession.id, [...activeSession.checklist, newItem]);
+                    }}
+                    onItemDelete={(itemId) => {
+                      setChecklist(activeSession.id, activeSession.checklist.filter(item => item.id !== itemId));
+                    }}
+                    onItemUpdate={(itemId, text) => {
+                      setChecklist(activeSession.id, activeSession.checklist.map(item =>
+                        item.id === itemId ? { ...item, text } : item
+                      ));
+                    }}
+                  />
+                )}
+              </div>
             </div>
           );
+        }
 
         case 'refs':
           return (
@@ -355,6 +397,28 @@ export function PwnInspector({ selectedNode }: PwnInspectorProps) {
             </div>
           );
 
+        case 'sessions':
+          return (
+            <div className="pwn-section">
+              <p className="text-xs text-cyan-400 font-mono mb-3">SAVED SESSIONS</p>
+              <SessionManager
+                sessions={sessions}
+                activeSessionId={activeSessionId}
+                onCreateSession={(name) => {
+                  const newSession = createSession(name, []);
+                  setActiveSessionId(newSession);
+                }}
+                onSelectSession={setActiveSessionId}
+                onDeleteSession={deleteSession}
+                onRenameSession={renameSession}
+                currentTechnique={selectedNode?.name || 'Technique'}
+              />
+              <p className="text-xs text-gray-500 mt-4 pt-3 border-t border-slate-800">
+                Sessions are automatically saved to your browser's local storage. You can create multiple sessions for different techniques and switch between them.
+              </p>
+            </div>
+          );
+
         default:
           return null;
       }
@@ -362,8 +426,8 @@ export function PwnInspector({ selectedNode }: PwnInspectorProps) {
   };
 
   const tabs = hasKB
-    ? (['overview', 'precond', 'exploits', 'checklist', 'refs', 'heap', 'resources'] as TabType[])
-    : (['overview', 'prerequisites', 'constraints', 'blueprint', 'heap', 'resources'] as TabType[]);
+    ? (['overview', 'precond', 'exploits', 'checklist', 'refs', 'heap', 'resources', 'sessions'] as TabType[])
+    : (['overview', 'prerequisites', 'constraints', 'blueprint', 'heap', 'resources', 'sessions'] as TabType[]);
 
   const tabLabels: Record<TabType, string> = {
     overview: 'Overview',
@@ -376,6 +440,7 @@ export function PwnInspector({ selectedNode }: PwnInspectorProps) {
     refs: 'References',
     heap: 'Heap Ref',
     resources: 'Resources',
+    sessions: 'Sessions',
   };
 
   return (
