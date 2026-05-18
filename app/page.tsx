@@ -111,14 +111,14 @@ export default function PwnExploitationDashboard() {
       </div>
 
         {/* Footer with GitHub Credit */}
-        <div className="border-t border-slate-800 bg-slate-950 px-4 py-3 flex items-center justify-between text-xs text-gray-500">
+        <div className="pwn-footer">
           <div className="flex items-center gap-2">
             <span>Knowledge Base by</span>
             <a
               href="https://github.com/Aryma-f4/pwn-framework"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-cyan-400 hover:text-cyan-300 transition-colors flex items-center gap-1"
+              className="transition-colors flex items-center gap-1"
             >
               Aryma-f4/pwn-framework
               <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
@@ -126,7 +126,7 @@ export default function PwnExploitationDashboard() {
               </svg>
             </a>
           </div>
-          <div className="text-gray-600">
+          <div>
             Data Source: Master Binary Exploitation Decision & Knowledge Matrix v5.0 + how2heap
           </div>
         </div>
