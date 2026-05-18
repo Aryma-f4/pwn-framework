@@ -3,18 +3,50 @@
 import { Technique } from '@/lib/pwn-data';
 import { PwnSearch } from './pwn-search';
 import { FilterType } from '@/lib/pwn-filters';
+import { Pin } from 'lucide-react';
 
 interface PwnSidebarProps {
   onSearchChange: (matches: Set<string>, pathHighlight: Set<string>) => void;
   onFilterChange: (filterType: FilterType | null) => void;
   visibleNodeCount: number;
+  searchInputRef?: React.RefObject<HTMLInputElement>;
+  pinnedTechniques?: Set<string>;
 }
 
-export function PwnSidebar({ onSearchChange, onFilterChange, visibleNodeCount }: PwnSidebarProps) {
+export function PwnSidebar({ 
+  onSearchChange, 
+  onFilterChange, 
+  visibleNodeCount,
+  searchInputRef,
+  pinnedTechniques = new Set()
+}: PwnSidebarProps) {
   return (
     <div className="pwn-sidebar">
       {/* Search and Filters */}
-      <PwnSearch onSearchChange={onSearchChange} onFilterChange={onFilterChange} />
+      <PwnSearch 
+        onSearchChange={onSearchChange} 
+        onFilterChange={onFilterChange}
+        searchInputRef={searchInputRef}
+      />
+
+      {/* Pinned Techniques */}
+      {pinnedTechniques.size > 0 && (
+        <div className="px-4 py-3 border-b border-gray-700/50">
+          <p className="text-xs font-mono text-cyan-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+            <Pin size={12} /> Pinned ({pinnedTechniques.size})
+          </p>
+          <div className="space-y-1">
+            {Array.from(pinnedTechniques).map((id) => (
+              <div
+                key={id}
+                className="text-xs bg-slate-800/50 border border-cyan-500/30 rounded px-2 py-1 text-gray-300 hover:text-cyan-300 transition-colors"
+              >
+                {id.replace(/-/g, ' ').toUpperCase()}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Legend */}
       <div className="pwn-legend">
@@ -52,8 +84,10 @@ export function PwnSidebar({ onSearchChange, onFilterChange, visibleNodeCount }:
           <span>Visible Nodes:</span>
           <span className="text-cyan-400 font-mono">{visibleNodeCount}</span>
         </div>
-        <p className="text-gray-600 pt-2">
-          Double-click the canvas to reset zoom. Click nodes to explore details.
+        <p className="text-gray-600 pt-2 text-xs leading-relaxed">
+          <span className="block">Press <code className="bg-slate-800 px-1 rounded text-cyan-400 font-mono">?</code> for help</span>
+          <span className="block">Ctrl+P to pin techniques</span>
+          <span className="block">/ to search, Esc to clear</span>
         </p>
       </div>
     </div>
