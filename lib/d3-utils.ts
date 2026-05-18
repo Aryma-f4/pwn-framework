@@ -64,33 +64,24 @@ export const createTreeLayout = (
 export const getCategoryColor = (category: string): string => {
   switch (category) {
     case 'root':
-      return '#f5f5f5'; // white
+      return '#1f6feb'; // vibrant blue
     case 'recon':
-      return '#10b981'; // emerald
+      return '#3fb950'; // bright green
     case 'technique':
-      return '#06b6d4'; // cyan
+      return '#58a6ff'; // bright cyan/blue
     case 'mitigation':
-      return '#f59e0b'; // amber
+      return '#d29922'; // deep gold/orange
     case 'leaf':
-      return '#f43f5e'; // rose
+      return '#ff6b9d'; // bright pink/magenta
     default:
-      return '#64748b'; // slate
+      return '#8b949e'; // muted gray
   }
 };
 
 export const getCategoryGlow = (category: string): string => {
-  switch (category) {
-    case 'recon':
-      return '#10b981'; // emerald glow
-    case 'technique':
-      return '#06b6d4'; // cyan glow
-    case 'mitigation':
-      return '#f59e0b'; // amber glow
-    case 'leaf':
-      return '#f43f5e'; // rose glow
-    default:
-      return '#8b5cf6'; // purple glow
-  }
+  const color = getCategoryColor(category);
+  // Enhanced multi-layer glow effect
+  return `drop-shadow(0 0 4px ${color}) drop-shadow(0 0 12px ${color}60) drop-shadow(0 0 20px ${color}30)`;
 };
 
 export const calculateNodeRadius = (category: string): number => {
