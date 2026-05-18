@@ -21,7 +21,7 @@ export function PwnSidebar({
   pinnedTechniques = new Set()
 }: PwnSidebarProps) {
   return (
-    <div className="pwn-sidebar">
+    <>
       {/* Search and Filters */}
       <PwnSearch 
         onSearchChange={onSearchChange} 
@@ -31,15 +31,15 @@ export function PwnSidebar({
 
       {/* Pinned Techniques */}
       {pinnedTechniques.size > 0 && (
-        <div className="px-4 py-3 border-b border-gray-700/50">
-          <p className="text-xs font-mono text-cyan-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-            <Pin size={12} /> Pinned ({pinnedTechniques.size})
+        <div className="px-2 py-2 border-b border-gray-700/30">
+          <p className="text-xs font-mono text-cyan-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+            <Pin size={10} /> Pinned ({pinnedTechniques.size})
           </p>
-          <div className="space-y-1">
+          <div className="space-y-0.5">
             {Array.from(pinnedTechniques).map((id) => (
               <div
                 key={id}
-                className="text-xs bg-slate-800/50 border border-cyan-500/30 rounded px-2 py-1 text-gray-300 hover:text-cyan-300 transition-colors"
+                className="text-xs bg-slate-800/50 border border-cyan-500/20 rounded px-2 py-0.5 text-gray-300 hover:text-cyan-300 transition-colors truncate"
               >
                 {id.replace(/-/g, ' ').toUpperCase()}
               </div>
@@ -50,7 +50,7 @@ export function PwnSidebar({
 
       {/* Legend */}
       <div className="pwn-legend">
-        <p className="text-xs font-mono text-gray-500 uppercase tracking-wider mb-3">Categories</p>
+        <p className="text-xs font-mono text-gray-500 uppercase tracking-wider mb-2">Categories</p>
 
         <div className="pwn-legend-item">
           <div className="pwn-legend-dot bg-gray-100" />
@@ -79,17 +79,17 @@ export function PwnSidebar({
       </div>
 
       {/* Stats */}
-      <div className="px-4 py-3 border-t border-gray-700/50 text-xs text-gray-500 space-y-1">
+      <div className="px-2 py-2 border-t border-gray-700/30 text-xs text-gray-500 space-y-0.5 mt-auto">
         <div className="flex justify-between">
           <span>Visible Nodes:</span>
           <span className="text-cyan-400 font-mono">{visibleNodeCount}</span>
         </div>
-        <p className="text-gray-600 pt-2 text-xs leading-relaxed">
-          <span className="block">Press <code className="bg-slate-800 px-1 rounded text-cyan-400 font-mono">?</code> for help</span>
+        <p className="text-gray-600 pt-1 text-xs leading-relaxed">
+          <span className="block">Press <code className="bg-slate-800 px-1 rounded text-cyan-400 font-mono text-xs">?</code> for help</span>
           <span className="block">Ctrl+P to pin techniques</span>
           <span className="block">/ to search, Esc to clear</span>
         </p>
       </div>
-    </div>
+    </>
   );
 }

@@ -26,7 +26,7 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     prerequisites: [],
     constraints: [],
     blueprint: '',
-    children: ['buffer_overflow', 'format_string', 'heap_exploit', 'sandbox_escape'],
+    children: ['buffer_overflow', 'format_string', 'heap_exploit', 'sandbox_escape', 'fsop_exploit'],
   },
 
   // BUFFER OVERFLOW BRANCH
@@ -42,7 +42,7 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     prerequisites: ['No ASLR', 'No Stack Canaries', 'Vulnerable input handling'],
     constraints: ['Requires buffer size knowledge', 'Address space must be predictable'],
     blueprint: 'buffer_overflow_exploit() {\n  const payload = craft_rop_chain();\n  trigger_vulnerable_function(payload);\n  hijack_execution_flow();\n}',
-    children: ['stack_pivot', 'rop_chain'],
+    children: ['stack_pivot', 'rop_chain', 'ret2csu', 'ret2dlresolve', 'srop', 'stack_clash'],
   },
 
   stack_pivot: {
@@ -90,6 +90,66 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     children: [],
   },
 
+  ret2csu: {
+    id: 'ret2csu',
+    name: 'Ret2csu',
+    category: 'technique',
+    stack: ['stack-based'],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'Uses gadgets from __libc_csu_init to populate rdx, rsi, rdi and call functions',
+    prerequisites: ['x64 dynamically linked binary', '__libc_csu_init present'],
+    constraints: ['Needs specific gadget layout from glibc'],
+    blueprint: 'ret2csu() {\n  call csu_gadget_1;\n  call csu_gadget_2;\n}',
+    children: ['rop_exec'],
+  },
+
+  ret2dlresolve: {
+    id: 'ret2dlresolve',
+    name: 'Ret2dl-resolve',
+    category: 'technique',
+    stack: ['stack-based'],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'Forces the dynamic linker to resolve an arbitrary function (like system) instead of a legit one',
+    prerequisites: ['No RELRO or Partial RELRO', 'No PIE (typically)', 'Large buffer space'],
+    constraints: ['Complex payload setup'],
+    blueprint: 'ret2dl() {\n  fake_reloc();\n  fake_symtab();\n  call_dl_resolve();\n}',
+    children: ['rop_exec'],
+  },
+
+  srop: {
+    id: 'srop',
+    name: 'SROP',
+    category: 'technique',
+    stack: ['stack-based'],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'Sigreturn Oriented Programming - fakes a signal frame on the stack to set all registers at once',
+    prerequisites: ['Control over RAX', 'sigreturn syscall gadget', 'Large stack buffer'],
+    constraints: ['Requires ~300 bytes of overflow space'],
+    blueprint: 'srop() {\n  set_rax_15();\n  syscall(); // sigreturn with fake frame\n}',
+    children: ['rop_exec'],
+  },
+
+  stack_clash: {
+    id: 'stack_clash',
+    name: 'Stack Clash',
+    category: 'technique',
+    stack: ['stack-based'],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'Jumps the stack guard page to clash with the heap or other memory regions',
+    prerequisites: ['Large stack allocation', 'VLA or alloca() usage'],
+    constraints: ['OS/Kernel patch dependent'],
+    blueprint: 'clash() {\n  alloc_huge_stack();\n  touch_pages();\n  overwrite_target();\n}',
+    children: [],
+  },
+
   heap_spray: {
     id: 'heap_spray',
     name: 'Heap Spray',
@@ -118,7 +178,7 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     prerequisites: ['Unvalidated user input', 'Format function usage'],
     constraints: ['Format string position discovery', 'Address alignment'],
     blueprint: 'format_string_exploit() {\n  const offset = discover_offset();\n  const payload = "%x".repeat(offset) + "%n";\n  leak_memory(payload);\n}',
-    children: ['format_leak', 'format_write'],
+    children: ['format_leak', 'format_write', 'blind_format'],
   },
 
   format_leak: {
@@ -196,6 +256,21 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     children: [],
   },
 
+  blind_format: {
+    id: 'blind_format',
+    name: 'Blind Format String',
+    category: 'technique',
+    stack: [],
+    format: ['format-string'],
+    heap: [],
+    sandbox: [],
+    description: 'Exploits format string vulnerabilities when output is not visible (blind)',
+    prerequisites: ['Vulnerability is accessible but output is suppressed'],
+    constraints: ['Requires time-based or crash-based side channels'],
+    blueprint: 'blind_bof() {\n  dump_binary_via_brop_like();\n}',
+    children: [],
+  },
+
   // HEAP EXPLOIT BRANCH
   heap_exploit: {
     id: 'heap_exploit',
@@ -209,7 +284,7 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     prerequisites: ['Heap overflow', 'Allocator implementation knowledge'],
     constraints: ['Heap layout control', 'Metadata accessible'],
     blueprint: 'heap_exploit() {\n  corrupt_heap_metadata();\n  trigger_allocator_vuln();\n  achieve_code_exec();\n}',
-    children: ['use_after_free', 'double_free'],
+    children: ['use_after_free', 'double_free', 'house_of_botcake', 'house_of_rabbit', 'house_of_roman', 'tcache_stashing'],
   },
 
   use_after_free: {
@@ -272,6 +347,112 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     children: [],
   },
 
+  house_of_botcake: {
+    id: 'house_of_botcake',
+    name: 'House of Botcake',
+    category: 'technique',
+    stack: [],
+    format: [],
+    heap: ['heap-based'],
+    sandbox: [],
+    description: 'Bypasses tcache double-free checks by consolidating a large chunk, then freeing a smaller enclosed chunk to tcache',
+    prerequisites: ['Glibc 2.29-2.31+', 'Ability to allocate and free 7 chunks (fill tcache)'],
+    constraints: ['Needs overlapping chunks capability'],
+    blueprint: 'botcake() {\n  fill_tcache();\n  free(prev); free(target); // consolidate\n  free(target); // to tcache\n}',
+    children: ['heap_control'],
+  },
+
+  house_of_rabbit: {
+    id: 'house_of_rabbit',
+    name: 'House of Rabbit',
+    category: 'technique',
+    stack: [],
+    format: [],
+    heap: ['heap-based'],
+    sandbox: [],
+    description: 'Exploits malloc_consolidate to link fake chunks into fastbins and bypass checks',
+    prerequisites: ['Large allocation capability', 'Heap info leak'],
+    constraints: ['Very precise size formatting needed'],
+    blueprint: 'rabbit() {\n  trigger_malloc_consolidate();\n  forge_fastbin();\n}',
+    children: ['heap_control'],
+  },
+
+  house_of_roman: {
+    id: 'house_of_roman',
+    name: 'House of Roman',
+    category: 'technique',
+    stack: [],
+    format: [],
+    heap: ['heap-based'],
+    sandbox: [],
+    description: 'ASLR bypass for fastbin double free/unsorted bin attack using partial byte overwrites without leaks',
+    prerequisites: ['Heap vulnerability (UAF/overflow)', 'No libc leak needed'],
+    constraints: ['Requires 12-bit brute force (1/4096 success rate)'],
+    blueprint: 'roman() {\n  overwrite_lsb_fd();\n  unsorted_bin_attack_lsb();\n}',
+    children: ['heap_control'],
+  },
+
+  tcache_stashing: {
+    id: 'tcache_stashing',
+    name: 'Tcache Stashing Unlink',
+    category: 'technique',
+    stack: [],
+    format: [],
+    heap: ['heap-based'],
+    sandbox: [],
+    description: 'Uses calloc to bypass tcache and trigger small bin unlinking, corrupting the bk pointer to arbitrary write',
+    prerequisites: ['calloc usage', 'Glibc 2.26-2.31', 'Ability to fill tcache'],
+    constraints: ['Requires specific bin layout'],
+    blueprint: 'stashing() {\n  corrupt_small_bin_bk();\n  calloc(); // triggers stash\n}',
+    children: ['heap_control'],
+  },
+
+  // FSOP BRANCH
+  fsop_exploit: {
+    id: 'fsop_exploit',
+    name: 'File Stream Exploitation (FSOP)',
+    category: 'recon',
+    stack: [],
+    format: [],
+    heap: ['heap-based'], // often combined with heap
+    sandbox: [],
+    description: 'File Stream Oriented Programming - corrupts _IO_FILE structures (like stdin, stdout, stderr) to hijack control flow',
+    prerequisites: ['Arbitrary write or heap overflow on FILE structs'],
+    constraints: ['Glibc version specific vtable mitigations'],
+    blueprint: 'fsop() {\n  corrupt_FILE_vtable();\n  trigger_IO_flush();\n}',
+    children: ['house_of_apple', 'house_of_orange'],
+  },
+
+  house_of_apple: {
+    id: 'house_of_apple',
+    name: 'House of Apple (1 & 2)',
+    category: 'technique',
+    stack: [],
+    format: [],
+    heap: ['heap-based'],
+    sandbox: [],
+    description: 'Exploits modern glibc by hijacking _IO_FILE chains via _IO_wstr_jumps or _IO_wfile_jumps to achieve RCE',
+    prerequisites: ['Glibc 2.34+ (post-hook removal)', 'Large arbitrary write'],
+    constraints: ['Complex fake struct setup required'],
+    blueprint: 'apple() {\n  forge_wide_data();\n  set_vtable_to_wstr_jumps();\n}',
+    children: [],
+  },
+
+  house_of_orange: {
+    id: 'house_of_orange',
+    name: 'House of Orange',
+    category: 'technique',
+    stack: [],
+    format: [],
+    heap: ['heap-based'],
+    sandbox: [],
+    description: 'Corrupts top chunk size to trigger sysmalloc, yielding an unsorted bin chunk, then uses FSOP to get RCE during abort()',
+    prerequisites: ['No free() call available', 'Glibc < 2.26'],
+    constraints: ['Relies on abort() triggering _IO_flush_all_lockp'],
+    blueprint: 'orange() {\n  corrupt_top_chunk();\n  trigger_sysmalloc();\n  fsop_via_unsorted_bin();\n}',
+    children: [],
+  },
+
   // SANDBOX ESCAPE BRANCH
   sandbox_escape: {
     id: 'sandbox_escape',
@@ -285,7 +466,7 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     prerequisites: ['Sandbox architecture knowledge', 'IPC vulnerabilities'],
     constraints: ['Mitigation bypass required', 'Privilege escalation needed'],
     blueprint: 'sandbox_escape() {\n  const vuln = find_ipc_vulnerability();\n  escalate_privileges();\n  break_out_of_sandbox();\n}',
-    children: ['privilege_escalation', 'ipc_exploit'],
+    children: ['privilege_escalation', 'ipc_exploit', 'dirty_cow', 'modprobe_path'],
   },
 
   privilege_escalation: {
@@ -300,7 +481,7 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     prerequisites: ['Kernel vulnerability', 'SUID binary', 'Capability error'],
     constraints: ['Kernel version specific', 'Patch level dependent'],
     blueprint: 'escalate() {\n  const exploit = load_kernel_exploit();\n  exploit.execute();\n  verify_root_access();\n}',
-    children: ['kernel_rce', 'capability_abuse'],
+    children: ['kernel_rce', 'capability_abuse', 'ret2usr'],
   },
 
   ipc_exploit: {
@@ -360,6 +541,51 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     prerequisites: ['Mojo interface defined', 'Type confusion possible'],
     constraints: ['Mojo version specific', 'Serialization details'],
     blueprint: 'exploit_mojo() {\n  const binding = create_mojo_binding();\n  const rce = build_type_confusion();\n  send_exploit_message(rce);\n}',
+    children: [],
+  },
+
+  dirty_cow: {
+    id: 'dirty_cow',
+    name: 'Dirty COW (CVE-2016-5195)',
+    category: 'technique',
+    stack: [],
+    format: [],
+    heap: [],
+    sandbox: ['sandbox-escape'],
+    description: 'Exploits a race condition in Linux memory management (Copy-On-Write) to write to read-only files (like /etc/passwd or SUID binaries)',
+    prerequisites: ['Kernel < 4.8.3', 'Local access'],
+    constraints: ['Can cause system instability'],
+    blueprint: 'dirty_cow() {\n  mmap_read_only_file();\n  thread1_madvise_dontneed();\n  thread2_write_proc_self_mem();\n}',
+    children: [],
+  },
+
+  modprobe_path: {
+    id: 'modprobe_path',
+    name: 'modprobe_path Overwrite',
+    category: 'leaf',
+    stack: [],
+    format: [],
+    heap: [],
+    sandbox: ['sandbox-escape'],
+    description: 'Kernel exploit technique that overwrites core_pattern or modprobe_path to execute an arbitrary script as root',
+    prerequisites: ['Arbitrary write in kernel space'],
+    constraints: ['Requires KASLR bypass to find modprobe_path'],
+    blueprint: 'modprobe() {\n  write_kernel_addr(modprobe_path, "/tmp/x");\n  trigger_unknown_executable();\n}',
+    children: [],
+  },
+
+  ret2usr: {
+    id: 'ret2usr',
+    name: 'ret2usr',
+    category: 'leaf',
+    stack: [],
+    format: [],
+    heap: [],
+    sandbox: ['sandbox-escape'],
+    description: 'Kernel exploitation technique that redirects kernel execution to a user-space function to escalate privileges',
+    prerequisites: ['Kernel arbitrary execution', 'SMEP disabled'],
+    constraints: ['Blocked by SMEP (Supervisor Mode Execution Protection)'],
+    blueprint: 'ret2usr() {\n  hijack_kernel_ptr(user_space_payload);\n  // user_space_payload: commit_creds(prepare_kernel_cred(0))\n}',
     children: [],
   },
 };

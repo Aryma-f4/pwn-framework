@@ -8,14 +8,19 @@ import { getHeapReferenceForTechnique } from '@/lib/heap-reference-mapping';
 import { InteractiveChecklist } from './interactive-checklist';
 import { SessionManager } from './session-manager';
 import { useSessions, ChecklistItem } from '@/lib/use-sessions';
+import { ReconWizard } from './recon-wizard';
+import { ExploitRecommender } from './exploit-recommender';
 
 interface PwnInspectorProps {
   selectedNode: Technique | null;
+  reconTags?: Set<string>;
+  onReconTagsChange?: (tags: Set<string>) => void;
+  onSelectTechniqueById?: (techniqueId: string) => void;
 }
 
-type TabType = 'overview' | 'prerequisites' | 'constraints' | 'blueprint' | 'precond' | 'exploits' | 'checklist' | 'refs' | 'heap' | 'resources' | 'sessions';
+type TabType = 'overview' | 'prerequisites' | 'constraints' | 'blueprint' | 'precond' | 'exploits' | 'checklist' | 'refs' | 'heap' | 'resources' | 'sessions' | 'recon';
 
-export function PwnInspector({ selectedNode }: PwnInspectorProps) {
+export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsChange, onSelectTechniqueById }: PwnInspectorProps) {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [copiedTab, setCopiedTab] = useState<string | null>(null);
   const { sessions, activeSessionId, setActiveSessionId, createSession, deleteSession, renameSession, updateChecklistItem, setChecklist, getActiveSession, isLoaded } = useSessions();
@@ -44,10 +49,13 @@ export function PwnInspector({ selectedNode }: PwnInspectorProps) {
     return (
       <div className="pwn-inspector">
         <div className="pwn-inspector-header">
-          <div className="pwn-inspector-title">Explorer</div>
+          <div className="pwn-inspector-title">🎯 Pre-Pwn Recon</div>
         </div>
-        <div className="pwn-inspector-content flex items-center justify-center text-gray-500">
-          <p className="text-center">Select a technique to view details</p>
+        <div className="pwn-inspector-content">
+          <ReconWizard selectedTags={reconTags} onTagsChange={onReconTagsChange || (() => {})} />
+          <div className="pt-2 border-t border-slate-800">
+            <ExploitRecommender selectedTags={reconTags} onSelectTechnique={onSelectTechniqueById || (() => {})} />
+          </div>
         </div>
       </div>
     );
@@ -327,6 +335,16 @@ export function PwnInspector({ selectedNode }: PwnInspectorProps) {
             </div>
           );
 
+        case 'recon':
+          return (
+            <div className="pwn-section space-y-3">
+              <ReconWizard selectedTags={reconTags} onTagsChange={onReconTagsChange || (() => {})} />
+              <div className="pt-2 border-t border-slate-800">
+                <ExploitRecommender selectedTags={reconTags} onSelectTechnique={onSelectTechniqueById || (() => {})} />
+              </div>
+            </div>
+          );
+
         default:
           return null;
       }
@@ -397,6 +415,16 @@ export function PwnInspector({ selectedNode }: PwnInspectorProps) {
             </div>
           );
 
+        case 'recon':
+          return (
+            <div className="pwn-section space-y-3">
+              <ReconWizard selectedTags={reconTags} onTagsChange={onReconTagsChange || (() => {})} />
+              <div className="pt-2 border-t border-slate-800">
+                <ExploitRecommender selectedTags={reconTags} onSelectTechnique={onSelectTechniqueById || (() => {})} />
+              </div>
+            </div>
+          );
+
         case 'sessions':
           return (
             <div className="pwn-section">
@@ -426,8 +454,8 @@ export function PwnInspector({ selectedNode }: PwnInspectorProps) {
   };
 
   const tabs = hasKB
-    ? (['overview', 'precond', 'exploits', 'checklist', 'refs', 'heap', 'resources', 'sessions'] as TabType[])
-    : (['overview', 'prerequisites', 'constraints', 'blueprint', 'heap', 'resources', 'sessions'] as TabType[]);
+    ? (['overview', 'precond', 'exploits', 'checklist', 'refs', 'heap', 'resources', 'sessions', 'recon'] as TabType[])
+    : (['overview', 'prerequisites', 'constraints', 'blueprint', 'heap', 'resources', 'sessions', 'recon'] as TabType[]);
 
   const tabLabels: Record<TabType, string> = {
     overview: 'Overview',
@@ -441,6 +469,7 @@ export function PwnInspector({ selectedNode }: PwnInspectorProps) {
     heap: 'Heap Ref',
     resources: 'Resources',
     sessions: 'Sessions',
+    recon: '🎯 Recon',
   };
 
   return (

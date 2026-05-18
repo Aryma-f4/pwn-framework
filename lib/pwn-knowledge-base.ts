@@ -549,6 +549,184 @@ rop(syscall)
       { description: 'Seccomp Exploitation Techniques', url: 'https://lkmidas.github.io/posts/20210105-seccomp/' },
       { tool: 'pwntools', description: 'ROP gadget chaining for syscall automation' }
     ]
+  },
+
+  ret2csu: {
+    id: 'ret2csu',
+    name: 'Ret2csu (Return-to-csu)',
+    category: 'technique',
+    class: 'ret2csu',
+    description: 'A ROP technique that uses the universally available __libc_csu_init gadgets in dynamically linked x64 ELF binaries to populate RDX, RSI, RDI, and call an arbitrary function pointer. Extremely useful when standard pop rdx/rsi/rdi gadgets are missing.',
+    preconditions: {
+      summary: 'Dynamically linked x64 ELF binary with a buffer overflow, lacking standard ROP gadgets (specifically pop rdx).',
+      required: [
+        'Buffer overflow allowing RIP control',
+        'x64 dynamically linked ELF binary',
+        '__libc_csu_init function present in the binary (typically present by default in gcc up to ~v11)'
+      ],
+      detectionSteps: [
+        'Run `objdump -d binary | grep __libc_csu_init` to verify existence',
+        'Use ROPgadget or ropper to search for `pop rdx`. If none exist, ret2csu is a strong candidate.'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Standard ret2csu sequence',
+        description: 'Execute the two-stage gadget from __libc_csu_init to call a function with 3 controlled arguments.',
+        steps: [
+          'Locate the two gadgets in __libc_csu_init (Gadget 1: pop rbx, rbp, r12, r13, r14, r15; Gadget 2: mov rdx, r15; mov rsi, r14; mov edi, r13d; call [r12+rbx*8]).',
+          'Chain Gadget 1 to setup registers: rbx=0, rbp=1, r12=function_ptr, r13=arg1(rdi), r14=arg2(rsi), r15=arg3(rdx).',
+          'Chain into Gadget 2. It will set rdx, rsi, rdi, and call [r12].',
+          'Since rbx=0 and rbp=1, the subsequent cmp and jne will fall through, popping 7 values (add rsp, 8 and 6 pops).',
+          'Pad the ROP chain with 7 * 8 = 56 bytes of junk, then place the next ROP gadget address.'
+        ],
+        tools: ['ropper', 'pwndbg', 'pwntools'],
+        codeSnippet: `def ret2csu(func_ptr, arg1, arg2, arg3):
+    # csu_gadget_1: pop rbx, rbp, r12, r13, r14, r15, ret
+    # csu_gadget_2: mov rdx, r15; mov rsi, r14; mov edi, r13d; call [r12+rbx*8]
+    payload = p64(csu_gadget_1)
+    payload += p64(0)          # rbx = 0
+    payload += p64(1)          # rbp = 1
+    payload += p64(func_ptr)   # r12 = pointer to function to call
+    payload += p64(arg1)       # r13 -> rdi
+    payload += p64(arg2)       # r14 -> rsi
+    payload += p64(arg3)       # r15 -> rdx
+    payload += p64(csu_gadget_2)
+    payload += b'JUNKJUNK' * 7 # padding for the pops after call
+    return payload`
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Target function executed with correct 3 arguments'],
+      artifacts: ['Stack state shifted by 56 bytes post-execution']
+    },
+    operatorChecklist: [
+      '[ ] Verify __libc_csu_init exists (not present in very recent gcc versions)',
+      '[ ] Find Gadget 1 (pops) and Gadget 2 (movs and call)',
+      '[ ] Identify a pointer to the function you want to call (r12 must point to a POINTER to the function, e.g., a GOT entry)',
+      '[ ] Build the chain setting rbx=0, rbp=1',
+      '[ ] Account for the 56 bytes of junk after the gadget completes'
+    ],
+    vulnerabilityTypes: ['stack', 'rop'],
+    references: [
+      { description: 'Return-to-csu (ret2csu) tutorial', url: 'https://ropemporium.com/guide.html' }
+    ]
+  },
+
+  ret2dlresolve: {
+    id: 'ret2dlresolve',
+    name: 'Return-to-dl-resolve',
+    category: 'technique',
+    class: 'ret2dlresolve',
+    description: 'A technique that exploits the lazy binding mechanism of the dynamic linker (_dl_runtime_resolve). By forging Elf32_Rel/Elf64_Rela, Elf32_Sym/Elf64_Sym, and string table entries in memory, an attacker forces the dynamic linker to resolve and execute an arbitrary function (like system) instead of a legitimate one, all without needing a libc leak.',
+    preconditions: {
+      summary: 'Dynamically linked ELF binary with NO RELRO or Partial RELRO, and a buffer overflow large enough to hold forged structures.',
+      required: [
+        'Buffer overflow allowing RIP control and significant payload space (>100 bytes)',
+        'Known writable memory area at a fixed address (to place forged structures)',
+        'Partial RELRO or No RELRO (Full RELRO resolves all symbols at startup, removing _dl_runtime_resolve)'
+      ],
+      detectionSteps: [
+        'Run `checksec` to verify RELRO (must not be Full)',
+        'Run `checksec` to verify PIE (typically needs No PIE to have a known writable address like .bss)'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Forging dynamic linker structures (32-bit/64-bit)',
+        description: 'Forge Reloc, Sym, and StrTab entries to trick _dl_runtime_resolve into resolving system().',
+        steps: [
+          'Identify the address of the PLT0 entry (pushes link_map and jumps to _dl_runtime_resolve).',
+          'Calculate the reloc_offset such that .rel.plt + reloc_offset points to your forged Reloc structure in writable memory.',
+          'Forge a Reloc structure. Its r_info field must contain a sym_offset pointing to your forged Symbol structure.',
+          'Forge a Symbol structure. Its st_name field must contain a string offset pointing to the string "system" in your forged string table.',
+          'Build ROP chain: push arg1 (e.g., "/bin/sh" address), jump to PLT0, push reloc_offset.',
+          'The dynamic linker will read your forged structures, resolve "system", and execute it with your argument.'
+        ],
+        tools: ['pwntools (Ret2dlresolvePayload)', 'readelf'],
+        codeSnippet: `// Using pwntools simplifies this massively:
+elf = ELF('./binary')
+rop = ROP(elf)
+dlresolve = Ret2dlresolvePayload(elf, symbol="system", args=["/bin/sh"])
+rop.read(0, dlresolve.data_addr) # read payload into bss
+rop.ret2dlresolve(dlresolve)     # trigger dl_resolve
+payload = fit({ offset: rop.chain() })
+io.sendline(payload)
+io.sendline(dlresolve.payload)`
+      }
+    ],
+    postconditions: {
+      successIndicators: ['system("/bin/sh") executed without leaking libc'],
+      artifacts: ['Forged ELF structures in .bss or other writable section']
+    },
+    operatorChecklist: [
+      '[ ] Verify binary is dynamically linked and NOT Full RELRO',
+      '[ ] Find a known, writable memory address (e.g., end of .bss)',
+      '[ ] Calculate offsets for Reloc, Sym, and StrTab',
+      '[ ] Ensure no bad characters in offsets if input is string-based',
+      '[ ] Forge the payload (highly recommend using pwntools Ret2dlresolvePayload)',
+      '[ ] Execute ROP chain to trigger PLT0 with forged reloc_offset'
+    ],
+    vulnerabilityTypes: ['stack', 'rop', 'dynamic-linking'],
+    references: [
+      { tool: 'pwntools Ret2dlresolvePayload', url: 'https://docs.pwntools.com/en/stable/rop/ret2dlresolve.html' }
+    ]
+  },
+
+  fsop_exploit: {
+    id: 'fsop_exploit',
+    name: 'File Stream Oriented Programming (FSOP)',
+    category: 'technique',
+    class: 'fsop',
+    description: 'Exploitation technique that corrupts the internal fields and vtables of glibc _IO_FILE structures (like stdin, stdout, stderr, or dynamically opened files). By modifying the _IO_jump_t vtable or internal pointers, attackers can hijack control flow when file stream operations (like fread, fwrite, or exit/abort flushing) occur.',
+    preconditions: {
+      summary: 'Ability to overwrite a _IO_FILE structure in memory (e.g., via heap overflow, UAF, or arbitrary write).',
+      required: [
+        'Memory corruption primitive targeting the heap (where dynamic files live) or libc data section (where stdout/stderr live)',
+        'Knowledge of glibc version (critical for vtable mitigation bypasses)'
+      ],
+      detectionSteps: [
+        'Identify arbitrary write or heap overflow',
+        'Check if binary uses file operations or if you can trigger exit()/abort() which flushes all open streams via _IO_list_all'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Classic FSOP (glibc < 2.24)',
+        description: 'Directly overwrite the vtable pointer of a _IO_FILE structure.',
+        steps: [
+          'Overwrite the _IO_FILE structure in memory.',
+          'Set the vtable pointer (at the end of the struct) to point to a forged vtable in memory you control.',
+          'Place the address of system() or a one_gadget at the offset of the function that will be called (e.g., _IO_file_overflow).',
+          'Trigger a stream operation or exit().'
+        ]
+      },
+      {
+        name: 'vtable Mitigation Bypass (House of Apple / wide data)',
+        description: 'Exploit newer glibc versions (2.24+) that validate vtables against the read-only __libc_IO_vtables section.',
+        steps: [
+          'Since you cannot point the vtable to your own forged table, point it to an existing but differently purposed vtable within the valid section (e.g., _IO_wstr_jumps).',
+          'Forge the _wide_data structure pointer within the _IO_FILE to point to controlled memory.',
+          'When a wide-character operation is triggered, the execution will follow the pointers in your forged _wide_data struct, eventually calling an arbitrary function.'
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Control flow hijacked during I/O operation or exit()'],
+      artifacts: ['Corrupted _IO_FILE structures in libc or heap']
+    },
+    operatorChecklist: [
+      '[ ] Determine glibc version to identify active vtable mitigations',
+      '[ ] Identify which _IO_FILE to corrupt (stdout, stderr, or heap file)',
+      '[ ] Setup the forged structure with correct magic numbers and flags to bypass initial validation checks',
+      '[ ] Setup the forged vtable or wide_data structure',
+      '[ ] Trigger the flush or operation (e.g., via return from main, abort(), or puts())'
+    ],
+    vulnerabilityTypes: ['heap', 'arbitrary-write', 'fsop'],
+    references: [
+      { description: 'FSOP Introduction', url: 'https://ctf-wiki.mahaloz.re/pwn/linux/io_file/fsop/' },
+      { description: 'House of Apple', url: 'https://bbs.kanxue.com/thread-273832.htm' }
+    ]
   }
 };
 

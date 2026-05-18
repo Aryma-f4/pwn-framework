@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Technique, PWN_TECHNIQUES } from '@/lib/pwn-data';
 import { filterByVulnerability, FilterType } from '@/lib/pwn-filters';
+import { getExploitRecommendations } from '@/lib/pwn-recon-data';
 import { PwnTreeCanvas } from '@/components/pwn-tree-canvas';
 import { PwnSidebar } from '@/components/pwn-sidebar';
 import { PwnInspector } from '@/components/pwn-inspector';
@@ -18,10 +19,74 @@ export default function PwnExploitationDashboard() {
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [pinnedTechniques, setPinnedTechniques] = useState<Set<string>>(new Set());
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [reconTags, setReconTags] = useState<Set<string>>(new Set());
+
+  // Detect mobile breakpoint
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 768px)');
+    const handleChange = (e: MediaQueryListEvent | MediaQueryList) => {
+      setIsMobile(e.matches);
+      if (!e.matches) {
+        setSidebarOpen(false);
+        setInspectorOpen(false);
+      }
+    };
+    handleChange(mediaQuery);
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, []);
 
   const filteredTechniques = useMemo(() => {
-    return filterByVulnerability(PWN_TECHNIQUES, activeFilter);
-  }, [activeFilter]);
+    let techniques = filterByVulnerability(PWN_TECHNIQUES, activeFilter);
+
+    if (reconTags.size > 0) {
+      const recommendations = getExploitRecommendations(reconTags);
+      if (recommendations.length > 0) {
+        const includedIds = new Set<string>();
+        recommendations.forEach(r => includedIds.add(r.techniqueId));
+
+        // Add ancestors
+        const addAncestors = (techId: string) => {
+          for (const [key, tech] of Object.entries(PWN_TECHNIQUES)) {
+            if (tech.children?.includes(techId)) {
+              if (!includedIds.has(key)) {
+                includedIds.add(key);
+                addAncestors(key);
+              }
+            }
+          }
+        };
+        Array.from(includedIds).forEach(id => addAncestors(id));
+
+        // Add descendants for the originally matched nodes
+        const addDescendants = (techId: string) => {
+          const tech = PWN_TECHNIQUES[techId];
+          if (tech && tech.children) {
+            tech.children.forEach(childId => {
+              if (!includedIds.has(childId)) {
+                includedIds.add(childId);
+                addDescendants(childId);
+              }
+            });
+          }
+        };
+        recommendations.forEach(r => addDescendants(r.techniqueId));
+
+        // Build filtered result
+        const reconFiltered: Record<string, Technique> = {};
+        includedIds.forEach(id => {
+          if (techniques[id]) reconFiltered[id] = techniques[id];
+        });
+        
+        techniques = reconFiltered;
+      }
+    }
+
+    return techniques;
+  }, [activeFilter, reconTags]);
 
   const visibleNodeCount = Object.keys(filteredTechniques).length;
 
@@ -35,23 +100,52 @@ export default function PwnExploitationDashboard() {
     setSelectedNode(null);
   };
 
+  const closeMobileOverlays = useCallback(() => {
+    setSidebarOpen(false);
+    setInspectorOpen(false);
+  }, []);
+
+  const handleNodeSelect = useCallback((technique: Technique) => {
+    setSelectedNode(technique);
+    if (isMobile) {
+      setInspectorOpen(true);
+    }
+  }, [isMobile]);
+
+  const handleSelectTechniqueById = useCallback((techniqueId: string) => {
+    const technique = PWN_TECHNIQUES[techniqueId];
+    if (technique) {
+      setSelectedNode(technique);
+      if (isMobile) {
+        setInspectorOpen(true);
+      }
+    }
+  }, [isMobile]);
+
   // Keyboard shortcut handling
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Forward slash to focus search
       if (e.key === '/' && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
+        if (isMobile) {
+          setSidebarOpen(true);
+        }
         searchInputRef.current?.focus();
       }
       
       // Escape to clear
       if (e.key === 'Escape') {
         e.preventDefault();
-        setSelectedNode(null);
-        setActiveFilter(null);
-        setSearchMatches(new Set());
-        setPathHighlight(new Set());
-        searchInputRef.current?.blur();
+        if (sidebarOpen || inspectorOpen) {
+          closeMobileOverlays();
+        } else {
+          setSelectedNode(null);
+          setActiveFilter(null);
+          setSearchMatches(new Set());
+          setPathHighlight(new Set());
+          searchInputRef.current?.blur();
+        }
       }
       
       // Question mark for help
@@ -77,40 +171,126 @@ export default function PwnExploitationDashboard() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNode, pinnedTechniques]);
+  }, [selectedNode, pinnedTechniques, isMobile, sidebarOpen, inspectorOpen, closeMobileOverlays]);
+
+  // Highlight recommended techniques based on recon wizard selections
+  useEffect(() => {
+    if (reconTags.size === 0) {
+      // Only clear if the search input is empty to avoid stomping on manual searches
+      if (searchInputRef.current?.value === '') {
+        setSearchMatches(new Set());
+        setPathHighlight(new Set());
+      }
+      return;
+    }
+
+    const recommendations = getExploitRecommendations(reconTags);
+    const matches = new Set<string>();
+    const paths = new Set<string>();
+
+    recommendations.forEach(r => matches.add(r.techniqueId));
+
+    const addAncestors = (techId: string) => {
+      paths.add(techId);
+      for (const [key, tech] of Object.entries(PWN_TECHNIQUES)) {
+        if (tech.children?.includes(techId)) {
+          addAncestors(key);
+        }
+      }
+    };
+
+    // Also highlight descendants of the matched nodes to ensure the whole sub-tree is bright
+    const addDescendants = (techId: string) => {
+      paths.add(techId);
+      const tech = PWN_TECHNIQUES[techId];
+      if (tech && tech.children) {
+        tech.children.forEach(childId => {
+          addDescendants(childId);
+        });
+      }
+    };
+
+    matches.forEach(id => {
+      addAncestors(id);
+      addDescendants(id);
+    });
+
+    setSearchMatches(matches);
+    setPathHighlight(paths);
+  }, [reconTags]);
 
   return (
     <>
       <KeyboardHelpModal isOpen={showKeyboardHelp} onClose={() => setShowKeyboardHelp(false)} />
-      <div className="pwn-container flex flex-col">
-        <div className="flex flex-1 overflow-hidden">
-          <PwnSidebar
-            onSearchChange={handleSearchChange}
-            onFilterChange={handleFilterChange}
-            visibleNodeCount={visibleNodeCount}
-            searchInputRef={searchInputRef}
-            pinnedTechniques={pinnedTechniques}
-          />
+      <div className="pwn-container">
+        {/* Mobile toggle buttons */}
+        <button
+          className="pwn-mobile-toggle left"
+          onClick={() => { setSidebarOpen(!sidebarOpen); setInspectorOpen(false); }}
+          aria-label="Toggle sidebar"
+        >
+          ☰
+        </button>
+        <button
+          className="pwn-mobile-toggle right"
+          onClick={() => { setInspectorOpen(!inspectorOpen); setSidebarOpen(false); }}
+          aria-label="Toggle inspector"
+        >
+          ≡
+        </button>
 
-        <PwnTreeCanvas
-          selectedNode={selectedNode}
-          onNodeSelect={setSelectedNode}
-          searchMatches={searchMatches}
-          pathHighlight={pathHighlight}
-          filteredTechniques={filteredTechniques}
+        {/* Mobile overlay backdrop */}
+        <div 
+          className={`pwn-mobile-overlay ${(sidebarOpen || inspectorOpen) ? 'visible' : ''}`}
+          onClick={closeMobileOverlays}
         />
 
-        <ResizablePanel 
-          initialWidth={420}
-          minWidth={300}
-          maxWidth={700}
-          position="right"
-        >
-          <PwnInspector selectedNode={selectedNode} />
-        </ResizablePanel>
-      </div>
+        <div className="pwn-main-content">
+          <div className={`pwn-sidebar ${sidebarOpen ? 'mobile-open' : ''}`}>
+            <PwnSidebar
+              onSearchChange={handleSearchChange}
+              onFilterChange={handleFilterChange}
+              visibleNodeCount={visibleNodeCount}
+              searchInputRef={searchInputRef}
+              pinnedTechniques={pinnedTechniques}
+            />
+          </div>
 
-        {/* Footer with GitHub Credit */}
+          <PwnTreeCanvas
+            selectedNode={selectedNode}
+            onNodeSelect={handleNodeSelect}
+            searchMatches={searchMatches}
+            pathHighlight={pathHighlight}
+            filteredTechniques={filteredTechniques}
+          />
+
+          {!isMobile ? (
+            <ResizablePanel 
+              initialWidth={420}
+              minWidth={300}
+              maxWidth={700}
+              position="right"
+            >
+              <PwnInspector
+                selectedNode={selectedNode}
+                reconTags={reconTags}
+                onReconTagsChange={setReconTags}
+                onSelectTechniqueById={handleSelectTechniqueById}
+              />
+            </ResizablePanel>
+          ) : (
+            <div className={`pwn-inspector-wrapper ${inspectorOpen ? 'mobile-open' : ''}`}>
+              <PwnInspector
+                selectedNode={selectedNode}
+                reconTags={reconTags}
+                onReconTagsChange={setReconTags}
+                onSelectTechniqueById={handleSelectTechniqueById}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
         <div className="pwn-footer">
           <div className="flex items-center gap-2">
             <span>Knowledge Base by</span>
@@ -127,7 +307,7 @@ export default function PwnExploitationDashboard() {
             </a>
           </div>
           <div>
-            Data Source: Master Binary Exploitation Decision & Knowledge Matrix v5.0 + how2heap
+            Data Source: Master Binary Exploitation Decision &amp; Knowledge Matrix v5.0 + how2heap
           </div>
         </div>
       </div>

@@ -52,6 +52,25 @@ export const KB_MAPPING: Record<string, TechniqueDetails | undefined> = {
   'seccomp_bypass': PWN_KNOWLEDGE_BASE['sandbox_escape'],
   'orw_chain': PWN_KNOWLEDGE_BASE['sandbox_escape'],
   'kernel_rce': PWN_KNOWLEDGE_BASE['sandbox_escape'],
+  'dirty_cow': PWN_KNOWLEDGE_BASE['sandbox_escape'],
+  'modprobe_path': PWN_KNOWLEDGE_BASE['sandbox_escape'],
+  'ret2usr': PWN_KNOWLEDGE_BASE['sandbox_escape'],
+  'capability_abuse': PWN_KNOWLEDGE_BASE['sandbox_escape'],
+
+  'ret2csu': PWN_KNOWLEDGE_BASE['ret2csu'],
+  'ret2dlresolve': PWN_KNOWLEDGE_BASE['ret2dlresolve'],
+  'srop': PWN_KNOWLEDGE_BASE['stack_buffer_overflow'],
+  'stack_clash': PWN_KNOWLEDGE_BASE['stack_buffer_overflow'],
+  'blind_format': PWN_KNOWLEDGE_BASE['format_string_vulnerability'],
+  
+  'house_of_botcake': PWN_KNOWLEDGE_BASE['heap_buffer_overflow'],
+  'house_of_rabbit': PWN_KNOWLEDGE_BASE['heap_buffer_overflow'],
+  'house_of_roman': PWN_KNOWLEDGE_BASE['heap_buffer_overflow'],
+  'tcache_stashing': PWN_KNOWLEDGE_BASE['heap_buffer_overflow'],
+  
+  'fsop_exploit': PWN_KNOWLEDGE_BASE['fsop_exploit'],
+  'house_of_apple': PWN_KNOWLEDGE_BASE['fsop_exploit'],
+  'house_of_orange': PWN_KNOWLEDGE_BASE['fsop_exploit'],
 };
 
 export function getTechniqueKB(techniqueId: string): TechniqueDetails | undefined {
