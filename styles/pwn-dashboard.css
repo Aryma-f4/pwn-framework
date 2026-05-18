@@ -142,7 +142,10 @@
   border-bottom: 1px solid rgba(31, 111, 235, 0.15);
   background: linear-gradient(90deg, rgba(15, 23, 42, 0.6) 0%, rgba(31, 41, 55, 0.4) 100%);
   overflow-x: auto;
+  overflow-y: hidden;
   scroll-behavior: smooth;
+  flex-wrap: wrap;
+  min-height: fit-content;
 }
 
 .pwn-inspector-tabs::-webkit-scrollbar {
@@ -191,18 +194,53 @@
 .pwn-inspector-content {
   flex: 1;
   overflow-y: auto;
-  padding: 0.75rem;
+  overflow-x: hidden;
+  padding: 1rem;
   background: linear-gradient(180deg, rgba(31, 41, 55, 0.3) 0%, rgba(15, 23, 42, 0.5) 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.pwn-inspector-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.pwn-inspector-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.pwn-inspector-content::-webkit-scrollbar-thumb {
+  background: rgba(31, 111, 235, 0.4);
+  border-radius: 3px;
+}
+
+.pwn-inspector-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(31, 111, 235, 0.6);
+}
+
+/* Tree Node Label */
+.pwn-label {
+  fill: rgb(229, 231, 235);
+  font-weight: 500;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8), 0 0 8px rgba(15, 23, 42, 0.9);
+  pointer-events: none;
 }
 
 .pwn-section {
-  space-y: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+  min-width: 0;
 }
 
 .pwn-section-content {
   color: rgb(209, 213, 219);
   font-size: 0.875rem;
   line-height: 1.5;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 /* Code Block */

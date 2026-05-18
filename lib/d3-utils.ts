@@ -64,17 +64,17 @@ export const createTreeLayout = (
 export const getCategoryColor = (category: string): string => {
   switch (category) {
     case 'root':
-      return '#1f6feb'; // vibrant blue
+      return '#0ea5e9'; // bright sky blue
     case 'recon':
-      return '#3fb950'; // bright green
+      return '#10b981'; // emerald green
     case 'technique':
-      return '#58a6ff'; // bright cyan/blue
+      return '#06b6d4'; // cyan
     case 'mitigation':
-      return '#d29922'; // deep gold/orange
+      return '#f59e0b'; // amber/orange
     case 'leaf':
-      return '#ff6b9d'; // bright pink/magenta
+      return '#ec4899'; // vibrant pink
     default:
-      return '#8b949e'; // muted gray
+      return '#6b7280'; // gray
   }
 };
 
