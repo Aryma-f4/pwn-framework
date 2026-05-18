@@ -1,15 +1,16 @@
 'use client';
 
 import { useState } from 'react';
-import { Copy, Check, ExternalLink } from 'lucide-react';
+import { Copy, Check, ExternalLink, Github, BookOpen } from 'lucide-react';
 import { Technique } from '@/lib/pwn-data';
 import { getTechniqueKB, enrichedTechnique } from '@/lib/pwn-unified-data';
+import { getHeapReferenceForTechnique } from '@/lib/heap-reference-mapping';
 
 interface PwnInspectorProps {
   selectedNode: Technique | null;
 }
 
-type TabType = 'overview' | 'prerequisites' | 'constraints' | 'blueprint' | 'precond' | 'exploits' | 'checklist' | 'refs';
+type TabType = 'overview' | 'prerequisites' | 'constraints' | 'blueprint' | 'precond' | 'exploits' | 'checklist' | 'refs' | 'heap' | 'resources';
 
 export function PwnInspector({ selectedNode }: PwnInspectorProps) {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
@@ -192,6 +193,98 @@ export function PwnInspector({ selectedNode }: PwnInspectorProps) {
             </div>
           );
 
+        case 'heap':
+          const heapRef = getHeapReferenceForTechnique(selectedNode.id);
+          return heapRef ? (
+            <div className="pwn-section space-y-3">
+              <div>
+                <p className="text-xs text-purple-400 font-mono mb-1">HEAP TECHNIQUE</p>
+                <p className="text-gray-300 font-semibold text-sm">{heapRef.name}</p>
+              </div>
+              <div>
+                <p className="text-xs text-purple-400 font-mono mb-1">CATEGORY</p>
+                <p className="text-gray-300 text-sm">{heapRef.category.replace('-', ' ').toUpperCase()}</p>
+              </div>
+              <div>
+                <p className="text-xs text-purple-400 font-mono mb-1">DIFFICULTY</p>
+                <span className={`px-2 py-1 rounded text-xs font-mono ${
+                  heapRef.difficulty === 'Expert' ? 'bg-red-900/30 text-red-300' :
+                  heapRef.difficulty === 'Hard' ? 'bg-orange-900/30 text-orange-300' :
+                  heapRef.difficulty === 'Medium' ? 'bg-yellow-900/30 text-yellow-300' :
+                  'bg-green-900/30 text-green-300'
+                }`}>
+                  {heapRef.difficulty}
+                </span>
+              </div>
+              {heapRef.glibcVersions && (
+                <div>
+                  <p className="text-xs text-purple-400 font-mono mb-1">GLIBC VERSIONS</p>
+                  <div className="flex flex-wrap gap-1">
+                    {heapRef.glibcVersions.map((v) => (
+                      <span key={v} className="px-2 py-0.5 bg-slate-800 text-gray-300 text-xs rounded border border-slate-600">
+                        {v}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="pwn-section text-gray-500 text-xs">
+              No heap exploitation reference available for this technique.
+            </div>
+          );
+
+        case 'resources':
+          const heapRefRes = getHeapReferenceForTechnique(selectedNode.id);
+          return (
+            <div className="pwn-section space-y-2">
+              {heapRefRes && (
+                <>
+                  {heapRefRes.how2heapLink && (
+                    <a
+                      href={heapRefRes.how2heapLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block bg-slate-900/50 border border-slate-700 rounded p-3 hover:border-blue-500/50 transition-all group"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <Github size={14} className="text-blue-400" />
+                        <span className="text-xs font-mono text-blue-300">shellphish/how2heap</span>
+                        <ExternalLink size={10} className="opacity-50 group-hover:opacity-100" />
+                      </div>
+                      <p className="text-xs text-gray-400">Exploiting the Heap</p>
+                    </a>
+                  )}
+                  {heapRefRes.dhavalkapilChapter && (
+                    <a
+                      href={heapRefRes.dhavalkapilChapter}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block bg-slate-900/50 border border-slate-700 rounded p-3 hover:border-purple-500/50 transition-all group"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <BookOpen size={14} className="text-purple-400" />
+                        <span className="text-xs font-mono text-purple-300">Heap Exploitation Guide</span>
+                        <ExternalLink size={10} className="opacity-50 group-hover:opacity-100" />
+                      </div>
+                      <p className="text-xs text-gray-400">By Dhavalkapil</p>
+                    </a>
+                  )}
+                </>
+              )}
+              <div className="bg-slate-800/30 border border-slate-700/50 rounded p-2 text-xs text-gray-400">
+                <p className="mb-1 font-mono text-cyan-300">Exploitation Tips:</p>
+                <ul className="space-y-0.5 text-xs text-gray-500">
+                  <li>• Leak heap addresses via info disclosure</li>
+                  <li>• Use gdb breakpoints to inspect heap layout</li>
+                  <li>• Test with ASLR disabled first</li>
+                  <li>• Verify glibc version matches exploit</li>
+                </ul>
+              </div>
+            </div>
+          );
+
         default:
           return null;
       }
@@ -269,8 +362,8 @@ export function PwnInspector({ selectedNode }: PwnInspectorProps) {
   };
 
   const tabs = hasKB
-    ? (['overview', 'precond', 'exploits', 'checklist', 'refs'] as TabType[])
-    : (['overview', 'prerequisites', 'constraints', 'blueprint'] as TabType[]);
+    ? (['overview', 'precond', 'exploits', 'checklist', 'refs', 'heap', 'resources'] as TabType[])
+    : (['overview', 'prerequisites', 'constraints', 'blueprint', 'heap', 'resources'] as TabType[]);
 
   const tabLabels: Record<TabType, string> = {
     overview: 'Overview',
@@ -281,6 +374,8 @@ export function PwnInspector({ selectedNode }: PwnInspectorProps) {
     exploits: 'Exploitations',
     checklist: 'Checklist',
     refs: 'References',
+    heap: 'Heap Ref',
+    resources: 'Resources',
   };
 
   return (

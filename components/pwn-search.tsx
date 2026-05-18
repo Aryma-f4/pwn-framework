@@ -8,9 +8,10 @@ import { PWN_TECHNIQUES } from '@/lib/pwn-data';
 interface PwnSearchProps {
   onSearchChange: (matches: Set<string>, pathHighlight: Set<string>) => void;
   onFilterChange: (filterType: FilterType | null) => void;
+  searchInputRef?: React.RefObject<HTMLInputElement>;
 }
 
-export function PwnSearch({ onSearchChange, onFilterChange }: PwnSearchProps) {
+export function PwnSearch({ onSearchChange, onFilterChange, searchInputRef }: PwnSearchProps) {
   const [query, setQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterType | null>(null);
 
@@ -39,10 +40,11 @@ export function PwnSearch({ onSearchChange, onFilterChange }: PwnSearchProps) {
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cyan-500/60" />
         <input
+          ref={searchInputRef}
           type="text"
           value={query}
           onChange={(e) => handleSearchChange(e.target.value)}
-          placeholder="Search techniques..."
+          placeholder="Search techniques... (press / to focus)"
           className="pwn-search-input pl-9 pr-8"
         />
         {query && (
