@@ -288,7 +288,7 @@ Phase 3: Vulnerability Hunting
     format: [],
     heap: [],
     sandbox: [],
-    description: 'Observing the binary\\'s behavior during execution (debugging, tracing)',
+    description: 'Observing the binary\'s behavior during execution (debugging, tracing)',
     prerequisites: ['Execution environment', 'Debugger'],
     constraints: ['Anti-debugging techniques'],
     blueprint: `DYNAMIC ANALYSIS & DEBUGGING (GDB/PWNDBG)
@@ -359,10 +359,18 @@ continue
     format: [],
     heap: [],
     sandbox: [],
-    description: 'Bypassing ASLR/NX remotely without having the binary by byte-by-byte brute-forcing gadgets and the PLT.',
-    prerequisites: ['Server that restarts on crash', 'No PIE (or bruteforceable PIE)'],
-    constraints: ['Requires thousands of requests'],
-    blueprint: 'brop() {\n  find_stop_gadget();\n  find_brop_gadget();\n  find_puts_plt();\n  dump_binary();\n}',
+    description: 'Bypassing ASLR/NX remotely without the binary by brute-forcing gadgets byte-by-byte. Works on forking servers where crashes are non-fatal and the binary image is shared.',
+    prerequisites: ['Server that forks on connection (crash-tolerant)', 'No PIE (or brute-forceable PIE)', 'NX enabled', 'No stack canary'],
+    constraints: ['Requires 1000-10000+ requests depending on address space', 'Server must stay up after child crash'],
+    blueprint: `BROP WORKFLOW
+=====
+1. Find overflow offset (send increasing lengths until crash)
+2. Find Stop Gadget (probe addresses — valid ret/addrs don't crash)
+3. Find BROP Gadget (pop rdi; ret — probe stop+gadget pairs)
+4. Find puts@plt (pop_rdi + got_entry + candidate_plt)
+5. Dump .text section via puts@plt
+6. Identify libc version from leaked pointers
+7. Build final ROP chain`,
     children: ['rop_exec'],
   },
 
@@ -374,10 +382,10 @@ continue
     format: [],
     heap: [],
     sandbox: [],
-    description: 'Code reuse attack that relies on indirect jumps/calls instead of returns to bypass protections like Shadow Stacks (CET).',
-    prerequisites: ['Dispatcher gadget', 'Predictable jump tables'],
-    constraints: ['Finding a suitable dispatcher loop is difficult'],
-    blueprint: 'jop() {\n  setup_dispatcher();\n  chain_jmp_rax_gadgets();\n}',
+    description: 'Code reuse attack using indirect jumps (jmp [reg]) instead of ret instructions. Bypasses shadow stacks (Intel CET) and return-address-based defenses since no rets are used.',
+    prerequisites: ['Dispatcher gadget (e.g., jmp [rax] or call [rbx])', 'Control over the dispatch register', 'Predictable jump tables or indirect call targets'],
+    constraints: ['Finding a suitable dispatcher loop is very difficult', 'Gadgets must end with indirect jump, not ret', 'Requires per-binary gadget discovery — not generic'],
+    blueprint: 'jop() {\n  // Find: add rax, 8; jmp [rax]  (dispatcher)\n  // Place gadget addresses in a "dispatch table"\n  setup_dispatch_table(functional_gadgets);\n  set_dispatch_register(dispatch_table);\n  chain: load → store → syscall via jump dispatches\n}',
     children: ['rop_exec'],
   },
 
@@ -389,10 +397,19 @@ continue
     format: [],
     heap: [],
     sandbox: [],
-    description: 'Exploiting the kernel-provided vDSO (virtual dynamic shared object) mapped in user-space to execute syscalls like gettimeofday/rt_sigreturn.',
-    prerequisites: ['vDSO mapped', 'ASLR bypass for vDSO'],
-    constraints: ['vDSO randomization'],
-    blueprint: 'ret2vdso() {\n  leak_vdso();\n  call_sigreturn_vdso();\n}',
+    description: 'Leverages the kernel-provided vDSO (virtual dynamic shared object) mapped into every process to call syscalls directly (like rt_sigreturn, gettimeofday). The vDSO contains syscall/sysenter trampolines at randomized but contiguous addresses.',
+    prerequisites: ['vDSO mapped (always present on Linux)', 'Leak of vDSO base (or use partial overwrite if PIE off)'],
+    constraints: ['vDSO is randomized with ASLR', 'Only contains syscall entry stubs, not general gadgets'],
+    blueprint: `ret2vdso() {
+  // vDSO contains:
+  // __kernel_vsyscall  →  sysenter / syscall
+  // __kernel_sigreturn →  rt_sigreturn
+  // __kernel_rt_sigreturn → rt_sigreturn
+  leak_vdso_base();
+  // If PIE is off, vDSO base can be partially overwritten
+  vdso_sigreturn = vdso_base + sigreturn_offset;
+  // Chain to SROP via vDSO sigreturn trampoline
+}`,
     children: ['srop'],
   },
 
@@ -404,10 +421,20 @@ continue
     format: [],
     heap: [],
     sandbox: [],
-    description: 'Manipulates ESP/RSP to control stack layout and gadget execution',
-    prerequisites: ['ROP gadgets available', 'Writable memory regions'],
-    constraints: ['Address layout predictability required'],
-    blueprint: 'pivot_stack() {\n  const new_stack = find_writable_region();\n  set_rsp(new_stack);\n  execute_gadget_chain();\n}',
+    description: 'Redirects RSP from the real stack to an attacker-controlled region (heap, BSS, libc data). Critical when overflow space past RIP is too small for a full ROP chain. Common gadgets: leave;ret, xchg rsp,rax;ret, pop rsp;ret.',
+    prerequisites: ['ROP gadgets available', 'Writable memory region at known address for fake stack'],
+    constraints: ['Must know a writable address for the new stack', 'Fake stack must be pre-populated with the secondary ROP chain'],
+    blueprint: `stack_pivot_via_leave_ret() {
+  // Place secondary ROP chain at writable_addr
+  pre_write_chain(writable_addr, secondary_rop);
+
+  // Primary overflow (small):
+  payload = 'A' * rbp_offset;
+  payload += p64(fake_rbp);  // writable_addr - 8
+  payload += p64(leave_ret); // mov rsp,rbp; pop rbp; ret
+  
+  // On ret: RSP → fake_rbp+8 → secondary chain begins
+}`,
     children: ['rop_exec', 'heap_spray'],
   },
 
@@ -473,16 +500,26 @@ continue
 
   srop: {
     id: 'srop',
-    name: 'SROP',
+    name: 'SROP (Sigreturn)',
     category: 'technique',
     stack: ['stack-based'],
     format: [],
     heap: [],
     sandbox: [],
-    description: 'Sigreturn Oriented Programming - fakes a signal frame on the stack to set all registers at once',
-    prerequisites: ['Control over RAX', 'sigreturn syscall gadget', 'Large stack buffer'],
-    constraints: ['Requires ~300 bytes of overflow space'],
-    blueprint: 'srop() {\n  set_rax_15();\n  syscall(); // sigreturn with fake frame\n}',
+    description: 'Sigreturn Oriented Programming — forges a signal frame (SigreturnFrame) on the stack. When the kernel\'s rt_sigreturn syscall restores it, all 15 x86_64 registers are set to attacker-controlled values in a single step. The "one-shot" of ROP.',
+    prerequisites: ['Control over RAX (set to 15 for sigreturn)', '"syscall; ret" gadget', 'Large stack buffer (~0x178+ bytes)'],
+    constraints: ['Requires ~376 bytes of overflow space on x86_64', 'rt_sigreturn (syscall 15) must not be blocked by seccomp'],
+    blueprint: `srop_one_shot() {
+  frame = SigreturnFrame()
+  frame.rax = 59           // SYS_execve
+  frame.rdi = &"/bin/sh"   // filename
+  frame.rsi = 0            // argv
+  frame.rdx = 0            // envp
+  frame.rip = syscall_gadget
+
+  payload = padding + pop_rax(15) + syscall_gadget + bytes(frame)
+  // → sigreturn restores frame → execve("/bin/sh") runs
+}`,
     children: ['rop_exec'],
   },
 
@@ -494,10 +531,18 @@ continue
     format: [],
     heap: [],
     sandbox: [],
-    description: 'Jumps the stack guard page to clash with the heap or other memory regions',
-    prerequisites: ['Large stack allocation', 'VLA or alloca() usage'],
-    constraints: ['OS/Kernel patch dependent'],
-    blueprint: 'clash() {\n  alloc_huge_stack();\n  touch_pages();\n  overwrite_target();\n}',
+    description: 'Jumps over the stack guard page by allocating a very large stack variable or using alloca(), causing the stack to grow into another memory region (heap, mmap, or another thread\'s stack). Enables cross-region memory corruption without a typical overflow.',
+    prerequisites: ['Large stack allocation capability', 'VLA or alloca() with attacker-controlled size', 'Kernel without guard-gap protection (< 4.13)'],
+    constraints: ['OS/Kernel patch specific', 'Modern kernels have stack clash protection'],
+    blueprint: `stack_clash_exploit() {
+  // Allocate a huge stack frame to jump the guard page
+  alloca(0x200000);  // Allocates 2MB, skipping guard
+  
+  // Stack pointer now overlaps with heap or another region
+  // Write through stack touches another thread's memory
+  
+  // Modern: requires CVE-2017-1000364 style exploitation
+}`,
     children: [],
   },
 
@@ -630,10 +675,21 @@ continue
     format: ['format-string'],
     heap: [],
     sandbox: [],
-    description: 'Exploits format string vulnerabilities when output is not visible (blind)',
-    prerequisites: ['Vulnerability is accessible but output is suppressed'],
-    constraints: ['Requires time-based or crash-based side channels'],
-    blueprint: 'blind_bof() {\n  dump_binary_via_brop_like();\n}',
+    description: 'Format string vulnerability where output is not echoed back to the attacker (e.g., written to a log file or pipe that is not read). Must use side channels (crash/no-crash, timing delays) to infer leaked data or confirm writes.',
+    prerequisites: ['Vulnerability exists but output is suppressed/redirected', 'Observable side channel: crash, timing, or indirect output'],
+    constraints: ['Significantly slower exploitation (~seconds per byte)', 'Requires forking server or multi-connection tolerance'],
+    blueprint: `blind_fsb_exploit() {
+  // Crash oracle: overwrite GOT entry byte-by-byte
+  for (addr in target_range) {
+    // Overwrite 1 byte with %hhn → if crash, wrong byte
+    send_fmt("AAAA" + "%N$hhn")  
+    if (!crashed) byte_found();
+  }
+  
+  // Timing oracle: measure response delay for leaked bits
+  // Conditional: if bit is 1, call sleep(1)
+  // Then measure response time → infer bit value
+}`,
     children: [],
   },
 
@@ -661,10 +717,19 @@ continue
     format: [],
     heap: ['heap-based'],
     sandbox: [],
-    description: 'Accesses memory after it has been freed, enabling exploitation',
-    prerequisites: ['Memory free call accessible', 'Dangling pointer usage'],
-    constraints: ['Heap state predictability', 'Object reuse timing'],
-    blueprint: 'uaf_exploit() {\n  const obj = allocate_object();\n  free(obj);\n  reallocate_controlled();\n  use_freed_pointer(obj);\n}',
+    description: 'A memory pointer is used after the memory it points to has been freed. The attacker reallocates a same-size object into the freed slot, causing the dangling pointer to operate on attacker-controlled data (type confusion / vtable hijack).',
+    prerequisites: ['free(p) called without p = NULL', 'Later code dereferences p', 'Ability to allocate controlled data in the freed slot'],
+    constraints: ['Allocation must be of same size class for heap reuse', 'Timing between free and use is critical'],
+    blueprint: `uaf_exploit() {
+  obj = allocate(0x50);       // allocate an object
+  free(obj);                  // free it (dangling ptr!)
+  
+  // Reallocate attacker-controlled same-size object
+  fake = allocate(0x50);
+  *(uint64_t*)fake = target;  // overwrite old vtable/buffer
+  
+  obj->method();  // UAF: uses dangling obj → calls fake vtable!
+}`,
     children: ['heap_spray', 'vtable_hijack'],
   },
 
@@ -841,10 +906,22 @@ continue
     format: [],
     heap: ['heap-based'],
     sandbox: [],
-    description: 'Uses calloc to bypass tcache and trigger small bin unlinking, corrupting the bk pointer to arbitrary write',
-    prerequisites: ['calloc usage', 'Glibc 2.26-2.31', 'Ability to fill tcache'],
-    constraints: ['Requires specific bin layout'],
-    blueprint: 'stashing() {\n  corrupt_small_bin_bk();\n  calloc(); // triggers stash\n}',
+    description: 'Exploits calloc()\'s behavior: calloc bypasses tcache and picks from smallbins, then "stashes" remaining smallbin chunks into tcache. By corrupting a smallbin chunk\'s bk pointer, this stashing unlink can write a libc pointer to an arbitrary address.',
+    prerequisites: ['calloc() usage (NOT malloc)', 'Glibc 2.26-2.31', 'Ability to corrupt smallbin bk pointer', 'tcache not full (1-6 entries)'],
+    constraints: ['calloc must be used — malloc goes to tcache first', 'Requires specific smallbin/tcache layout'],
+    blueprint: `tcache_stashing_unlink() {
+  // Setup: free chunks to create smallbin + partial tcache
+  fill_tcache_partially(5);    // leave some slots empty
+  free(a); free(b);             // a → unsorted → smallbin (after next malloc)
+  // ... consolidate properly
+  
+  // Corrupt last smallbin chunk's bk
+  smallbin_tail->bk = target_addr - 0x10;
+  
+  // Trigger: calloc(size) → stashes into tcache → 
+  // target_addr receives libc pointer (main_arena+X)
+  c = calloc(1, size);  // BOOM: arbitrary write
+}`,
     children: ['heap_control'],
   },
 
@@ -918,10 +995,21 @@ continue
     format: [],
     heap: [],
     sandbox: ['sandbox-escape'],
-    description: 'Elevates permissions from restricted to unrestricted execution',
-    prerequisites: ['Kernel vulnerability', 'SUID binary', 'Capability error'],
-    constraints: ['Kernel version specific', 'Patch level dependent'],
-    blueprint: 'escalate() {\n  const exploit = load_kernel_exploit();\n  exploit.execute();\n  verify_root_access();\n}',
+    description: 'Exploits a kernel bug (UAF, heap overflow, race, logic error) to elevate from unprivileged user to root. Common primitives: overwriting cred struct (uid=0), modifying modprobe_path, or ROP chaining to commit_creds(prepare_kernel_cred(0)).',
+    prerequisites: ['Kernel vulnerability (CVE)', 'Local or remote execution on target', 'Knowledge of target kernel version and protections'],
+    constraints: ['SMEP (blocks ret2usr)', 'SMAP (blocks user memory access from kernel)', 'KASLR (randomizes kernel base)', 'KPTI (isolates user/kernel page tables)'],
+    blueprint: `kernel_priv_esc() {
+  // Option A: Overwrite cred struct
+  task_struct = find_task_struct();
+  task_struct.cred.uid = 0;  // become root
+  
+  // Option B: modprobe_path overwrite
+  // Write "/tmp/x" to kernel's modprobe_path
+  // Trigger unknown-binary exec → /tmp/x runs as root
+  
+  // Option C: Kernel ROP
+  // commit_creds(prepare_kernel_cred(0)) → root shell
+}`,
     children: ['kernel_rce', 'capability_abuse', 'ret2usr'],
   },
 
@@ -948,10 +1036,25 @@ continue
     format: [],
     heap: [],
     sandbox: ['sandbox-escape'],
-    description: 'Achieves remote code execution in kernel space',
-    prerequisites: ['Kernel vulnerability', 'Working exploit PoC'],
-    constraints: ['SMEP/SMAP evasion', 'KASLR bypass'],
-    blueprint: 'kernel_rce() {\n  const rip = leak_kernel_addr();\n  const chain = build_kernel_rop(rip);\n  trigger_kernel_crash(chain);\n}',
+    description: 'Achieves arbitrary code execution in kernel space (ring 0). Most commonly via kernel ROP chain → commit_creds(prepare_kernel_cred(0)) to become root, or by hijacking kernel function pointers.',
+    prerequisites: ['Kernel arbitrary execution primitive', 'KASLR bypass', 'SMEP bypass (via ROP or CR4 flip)'],
+    constraints: ['SMEP prevents ret2usr', 'SMAP blocks user memory access from kernel', 'KPTI complicates return to user space'],
+    blueprint: `kernel_rce_exploit() {
+  // 1. Leak kernel base (KASLR bypass)
+  kernel_base = leak_via_proc_kallsyms_or_heap_leak();
+  
+  // 2. Build kernel ROP chain
+  // pop rdi; ret → 0 (arg to prepare_kernel_cred)
+  // → prepare_kernel_cred
+  // → pop rdi; ret → return_value
+  // → commit_creds
+  // → iretq or swapgs_restore to return to user space
+  
+  // 3. Trigger the vulnerability to execute the ROP chain
+  trigger_kernel_bug(rop_chain);
+  
+  // 4. Back in user space: execve("/bin/sh") → root shell
+}`,
     children: ['msg_msg_corruption', 'userfaultfd_exploit'],
   },
 
@@ -993,10 +1096,17 @@ continue
     format: [],
     heap: [],
     sandbox: ['sandbox-escape'],
-    description: 'Exploiting flaws in the eBPF verifier\'s static analysis to trick it into loading malicious BPF programs that can read/write kernel memory.',
-    prerequisites: ['CAP_BPF or unprivileged bpf allowed'],
-    constraints: ['Kernel patch dependent, highly complex'],
-    blueprint: 'ebpf_exploit() {\n  craft_malicious_bpf_bytecode();\n  bypass_verifier_bounds_check();\n  bpf_map_update_elem_arb_write();\n}',
+    description: 'Tricks the kernel eBPF verifier\'s static analysis into loading a BPF program that accesses memory beyond verifier-approved bounds. The BPF can then read/write arbitrary kernel memory, enabling privilege escalation.',
+    prerequisites: ['CAP_BPF or CAP_SYS_ADMIN (or unprivileged_bpf_disabled=0)', 'Vulnerable kernel with verifier bug (CVE)', 'Knowledge of eBPF instruction set and verifier architecture'],
+    constraints: ['Extremely complex: requires deep kernel internals knowledge', 'Each kernel version has different verifier bugs', 'Often requires BPF JIT enabled'],
+    blueprint: `ebpf_verifier_bypass() {
+  // Craft BPF bytecode that tricks the verifier:
+  // 1. Make verifier think register is bounded [0, N]
+  // 2. At runtime, register holds >> N → OOB access
+  // 3. Use OOB map access to leak kernel pointers (KASLR bypass)
+  // 4. Use BPF helper (bpf_map_update_elem) to write to kernel mem
+  // 5. Overwrite modprobe_path → root shell
+}`,
     children: ['kernel_rce'],
   },
 
@@ -1084,10 +1194,17 @@ continue
     format: [],
     heap: [],
     sandbox: [],
-    description: 'Vulnerabilities stemming from how computers store and calculate numbers, often leading to buffer overflows or logic flaws.',
+    description: 'Exploits arithmetic bugs: overflow (wrap past max), underflow (wrap below zero), sign extension (negative narrow → huge wide), and signed/unsigned mismatches. Often the root cause that enables buffer overflows.',
     prerequisites: [],
     constraints: [],
-    blueprint: 'integer_analysis() {\n  check_variable_types();\n  find_unsigned_to_signed_casts();\n  find_allocation_size_math();\n}',
+    blueprint: `INTEGER VULN ANALYSIS
+====================
+1. Check types: signed int vs unsigned size_t vs char
+2. Find arithmetic before malloc/read/memcpy: size_calc = user_input + constant
+3. Edge cases: user_input = 0xFFFFFFFF → size_calc wraps to constant-1
+4. Underflow: size = 0; if (size - 1 > MAX) → 0-1 = 0xFFFFFFFF > MAX
+5. Sign extension: char(-1) → sign-extended to int → 0xFFFFFFFF
+6. Test: send 0, -1, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF`,
     children: ['integer_overflow', 'integer_underflow', 'sign_extension', 'off_by_one'],
   },
 
@@ -1099,10 +1216,18 @@ continue
     format: [],
     heap: ['heap-based'],
     sandbox: [],
-    description: 'An arithmetic operation attempts to create a numeric value that is larger than can be represented within the available storage space (e.g., 0xFFFFFFFF + 1 = 0x00000000).',
-    prerequisites: ['Unchecked arithmetic on allocation sizes or array indexes'],
-    constraints: [],
-    blueprint: 'int_overflow() {\n  send_size(0xFFFFFFFF);\n  // triggers malloc(0) but loops 0xFFFFFFFF times\n}',
+    description: 'An arithmetic result exceeds the maximum value of its storage type (e.g., 0xFFFFFFFF + 1 = 0x00000000 for 32-bit unsigned). Used to make malloc(0) while copying gigabytes, or to bypass size checks.',
+    prerequisites: ['Unchecked arithmetic on allocation sizes or array indexes', 'User-controlled size input'],
+    constraints: ['Need to find a code path where the overflowed value is used as size/count'],
+    blueprint: `int_overflow_exploit() {
+  // Example: size = get_input(); buf = malloc(size + 0x10);
+  // User sends 0xFFFFFFF0 → size+0x10 wraps to 0 (tiny alloc)
+  // Program then does: read(0, buf, size) → copies 4GB into 0-byte buffer!
+  
+  send_size(0xFFFFFFF0);
+  // Or: user_count * sizeof(element) can overflow
+  // e.g., count = 0x40000001, sizeof = 4 → product = 4 (wraps!)
+}`,
     children: ['buffer_overflow', 'heap_exploit'],
   },
 
@@ -1114,40 +1239,68 @@ continue
     format: [],
     heap: ['heap-based'],
     sandbox: [],
-    description: 'Subtracting below zero on an unsigned integer causes it to wrap around to its maximum value (e.g., 0 - 1 = 0xFFFFFFFF).',
-    prerequisites: ['Unchecked subtraction'],
-    constraints: [],
-    blueprint: 'int_underflow() {\n  send_size(0);\n  // size - 1 becomes 0xFFFFFFFF\n  trigger_bof();\n}',
+    description: 'Subtracting on an unsigned integer wraps it to near-maximum (e.g., 0 - 1 = 0xFFFFFFFF). Used to bypass "if (size-1 > MAX) fail" — since 0-1 is huge, the check passes and a giant value is used.',
+    prerequisites: ['Unchecked subtraction on unsigned types'],
+    constraints: ['The underflowed value must be used as size/count after the wrap'],
+    blueprint: `int_underflow_exploit() {
+  // size = 0;  (controlled by attacker)
+  // if (size - 1 <= MAX) {  // 0-1 = 0xFFFFFFFF → check FAILS!
+  //   memcpy(dst, src, size - 1); // copies 4GB to small buffer
+  // }
+  send_size(0);
+  // Or: idx = user_input - 1; arr[idx] 
+  // User sends idx=0 → arr[0xFFFFFFFF] = OOB write
+}`,
     children: ['buffer_overflow'],
   },
 
   sign_extension: {
     id: 'sign_extension',
-    name: 'Sign Extension Vulnerability',
+    name: 'Sign Extension Bug',
     category: 'technique',
     stack: ['stack-based'],
     format: [],
     heap: [],
     sandbox: [],
-    description: 'Casting a signed negative smaller integer (e.g., char -1) to a larger integer (e.g., int) fills the upper bits with 1s, resulting in a huge unsigned value.',
-    prerequisites: ['Implicit or explicit cast from signed narrow to wider type'],
-    constraints: [],
-    blueprint: 'sign_extend() {\n  char length = -1; // 0xFF\n  int new_length = length; // 0xFFFFFFFF\n}',
+    description: 'A narrow signed type (e.g., int8_t = -1 = 0xFF) is implicitly or explicitly cast to a wider unsigned type (e.g., size_t), sign-extending the negative value to all 1s (0xFFFFFFFF). Results in huge unsigned values from small negative inputs.',
+    prerequisites: ['Implicit or explicit cast from signed narrow type (char, int8_t, int16_t) to wider unsigned (size_t, uint32_t, uint64_t)'],
+    constraints: ['Must find the specific cast site in disassembly/decompilation'],
+    blueprint: `sign_extend_exploit() {
+  // char len = get_user_byte();  // user sends \\xFF (-128)
+  // int bufsize = len + 16;      // sign-extended: 0xFFFFFF00 + 16
+  // char *buf = malloc(bufsize); // undersized allocation
+  // memcpy(buf, src, bufsize);   // copies 4GB!
+  
+  // In C: int8_t → int32_t → size_t chain causes this
+  // Spot in Ghidra: CAST instructions followed by zero-extend
+  // (actually sign-extend via MOVSX/MOVSXD) before malloc/read
+}`,
     children: ['buffer_overflow'],
   },
 
   off_by_one: {
     id: 'off_by_one',
-    name: 'Off-By-One Error',
+    name: 'Off-by-One Error',
     category: 'technique',
     stack: ['stack-based'],
     format: [],
     heap: ['heap-based'],
     sandbox: [],
-    description: 'A logic error involving boundaries where a loop iterates one time too many or too few, allowing exactly 1 byte to be overwritten past a buffer.',
-    prerequisites: ['for(int i=0; i<=length; i++) or similar boundary flaw'],
-    constraints: ['Only 1 byte of overflow'],
-    blueprint: 'off_by_one() {\n  // overwrite saved RBP LSB on stack\n  // or overwrite chunk PREV_INUSE bit on heap\n}',
+    description: 'A boundary check is off by exactly one (e.g., i <= length instead of i < length), allowing exactly 1 byte of attacker-controlled overflow. Powerful for corrupting saved RBP LSB (stack pivot) or chunk size PREV_INUSE bit (heap consolidation).',
+    prerequisites: ['Loop with <= instead of <, or strncpy with wrong size, or NULL terminator past buffer'],
+    constraints: ['Only 1 byte (maximum 255 values) of overflow — need precise targeting'],
+    blueprint: `off_by_one_exploit() {
+  // Stack: overwrite saved RBP LSB → redirect caller's frame
+  payload = b'A' * buffer_size + b'\\\\x00'  // null byte overflow
+  // → RBP LSB = 0 → frame shifts to lower stack address
+  // → callers "leave" picks up fake frame + attacker's RIP
+  
+  // Heap: overflow into next chunk's size PREV_INUSE bit (bit 0)
+  // + set prev_size to distance to fake chunk
+  // → free(next) consolidates backward → overlapping chunks
+  *(uint8_t*)(chunk_a + chunk_a_size) = 0x00; // clear PREV_INUSE
+  *(chunk_a + chunk_a_size + 1) = fake_prev_size;
+}`,
     children: ['stack_pivot', 'house_of_einherjar'],
   },
 };

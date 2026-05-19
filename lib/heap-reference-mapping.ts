@@ -2,7 +2,6 @@
 import { HEAP_TECHNIQUES, HeapTechnique } from './heap-techniques';
 
 export function getHeapReferenceForTechnique(techniqueId: string): HeapTechnique | undefined {
-  // Map common technique names to heap technique IDs
   const mappings: Record<string, string> = {
     'fastbin': 'fastbin-dup',
     'tcache': 'tcache-poisoning',
@@ -15,7 +14,10 @@ export function getHeapReferenceForTechnique(techniqueId: string): HeapTechnique
     'house-of-einherjar': 'house-of-einherjar',
     'large-bin': 'large-bin-attack',
     'large-bin-attack': 'large-bin-attack',
-    'buffer-overflow': 'fastbin-dup', // Could also map to fastbin-dup-into-stack
+    'house-of-botcake': 'house-of-botcake',
+    'house-of-roman': 'house-of-roman',
+    'house-of-rabbit': 'house-of-force',
+    'buffer-overflow': 'fastbin-dup',
     'heap': 'tcache-poisoning',
     'exploit': 'house-of-force',
   };

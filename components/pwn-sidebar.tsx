@@ -3,7 +3,7 @@
 import { Technique } from '@/lib/pwn-data';
 import { PwnSearch } from './pwn-search';
 import { FilterType } from '@/lib/pwn-filters';
-import { Pin } from 'lucide-react';
+import { Pin, Search, Keyboard, HelpCircle } from 'lucide-react';
 
 interface PwnSidebarProps {
   onSearchChange: (matches: Set<string>, pathHighlight: Set<string>) => void;
@@ -31,17 +31,21 @@ export function PwnSidebar({
 
       {/* Pinned Techniques */}
       {pinnedTechniques.size > 0 && (
-        <div className="px-2 py-2 border-b border-gray-700/30">
-          <p className="text-xs font-mono text-cyan-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-            <Pin size={10} /> Pinned ({pinnedTechniques.size})
-          </p>
-          <div className="space-y-0.5">
+        <div className="space-y-2">
+          <div className="flex items-center gap-1.5">
+            <Pin size={10} className="text-cyan-400" />
+            <span className="text-xs font-semibold text-cyan-400 uppercase tracking-wider">
+              Pinned ({pinnedTechniques.size})
+            </span>
+          </div>
+          <div className="space-y-1">
             {Array.from(pinnedTechniques).map((id) => (
               <div
                 key={id}
-                className="text-xs bg-slate-800/50 border border-cyan-500/20 rounded px-2 py-0.5 text-gray-300 hover:text-cyan-300 transition-colors truncate"
+                className="pwn-pinned-item"
               >
-                {id.replace(/-/g, ' ').toUpperCase()}
+                <Pin size={10} className="text-cyan-500/50 flex-shrink-0" />
+                <span className="truncate">{id.replace(/-/g, ' ').toUpperCase()}</span>
               </div>
             ))}
           </div>
@@ -50,7 +54,7 @@ export function PwnSidebar({
 
       {/* Legend */}
       <div className="pwn-legend">
-        <p className="text-xs font-mono text-gray-500 uppercase tracking-wider mb-2">Categories</p>
+        <p className="pwn-legend-title">Categories</p>
 
         <div className="pwn-legend-item">
           <div className="pwn-legend-dot bg-gray-100" />
@@ -78,17 +82,38 @@ export function PwnSidebar({
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="px-2 py-2 border-t border-gray-700/30 text-xs text-gray-500 space-y-0.5 mt-auto">
-        <div className="flex justify-between">
-          <span>Visible Nodes:</span>
-          <span className="text-cyan-400 font-mono">{visibleNodeCount}</span>
+      {/* Stats & Help */}
+      <div className="mt-auto space-y-3">
+        <div className="pwn-divider" />
+        
+        <div className="pwn-stats">
+          <span className="text-muted-foreground">Visible Nodes</span>
+          <span className="pwn-stats-value">{visibleNodeCount}</span>
         </div>
-        <p className="text-gray-600 pt-1 text-xs leading-relaxed">
-          <span className="block">Press <code className="bg-slate-800 px-1 rounded text-cyan-400 font-mono text-xs">?</code> for help</span>
-          <span className="block">Ctrl+P to pin techniques</span>
-          <span className="block">/ to search, Esc to clear</span>
-        </p>
+
+        <div className="space-y-1.5">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Keyboard Shortcuts</p>
+          <div className="space-y-1">
+            <div className="pwn-shortcut-hint">
+              <kbd className="pwn-shortcut-key">/</kbd>
+              <span>to search</span>
+            </div>
+            <div className="pwn-shortcut-hint">
+              <kbd className="pwn-shortcut-key">Esc</kbd>
+              <span>to clear</span>
+            </div>
+            <div className="pwn-shortcut-hint">
+              <kbd className="pwn-shortcut-key">?</kbd>
+              <span>for help</span>
+            </div>
+            <div className="pwn-shortcut-hint">
+              <kbd className="pwn-shortcut-key">Ctrl</kbd>
+              <span>+</span>
+              <kbd className="pwn-shortcut-key">P</kbd>
+              <span>to pin</span>
+            </div>
+          </div>
+        </div>
       </div>
     </>
   );

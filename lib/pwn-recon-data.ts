@@ -411,6 +411,195 @@ const EXPLOIT_RULES: ExploitRule[] = [
     requiredLeaks: [],
     suggestedTools: ['GDB', 'pwntools'],
   },
+
+  // ── NEW RULES ──
+
+  // Off-by-One
+  {
+    name: 'Off-by-One → Heap Coalescing (Einherjar)',
+    techniqueId: 'off_by_one',
+    requiredTags: ['heap-vuln'],
+    boostTags: ['heap-overflow', 'info-leak'],
+    excludeTags: ['static'],
+    baseConfidence: 'medium',
+    reason: 'Off-by-one overflow into heap → corrupt PREV_INUSE → backward consolidation → overlapping chunks',
+    requiredLeaks: ['heap address'],
+    suggestedTools: ['pwndbg vis_heap_chunks', 'pwntools'],
+  },
+  {
+    name: 'Off-by-One → Stack Pivot (RBP LSB)',
+    techniqueId: 'off_by_one',
+    requiredTags: ['stack-bof', 'nx-enabled'],
+    boostTags: ['canary'],
+    excludeTags: [],
+    baseConfidence: 'medium',
+    reason: 'Off-by-one overflow on stack → corrupt saved RBP LSB → pivot stack frame',
+    requiredLeaks: ['stack layout'],
+    suggestedTools: ['GDB', 'pwntools'],
+  },
+
+  // Blind Format String
+  {
+    name: 'Blind Format String → BROP-like Dump',
+    techniqueId: 'format_string',
+    requiredTags: ['format-string'],
+    boostTags: ['network'],
+    excludeTags: [],
+    baseConfidence: 'low',
+    reason: 'Format string with no output → use side-channel (timing/crash) to leak data byte-by-byte',
+    requiredLeaks: [],
+    suggestedTools: ['pwntools', 'timing analysis scripts'],
+  },
+
+  // SROP Rules
+  {
+    name: 'SROP → execve (large overflow)',
+    techniqueId: 'srop',
+    requiredTags: ['stack-bof', 'static'],
+    boostTags: ['no-canary', 'rip-control'],
+    excludeTags: ['seccomp'],
+    baseConfidence: 'high',
+    reason: 'Static binary with large overflow (~300 bytes) → SROP one-shot sets all registers for execve',
+    requiredLeaks: [],
+    suggestedTools: ['pwntools SigreturnFrame', 'ROPgadget'],
+  },
+  {
+    name: 'SROP → ORW (seccomp bypass)',
+    techniqueId: 'srop',
+    requiredTags: ['seccomp', 'orw-allowed', 'stack-bof'],
+    boostTags: ['no-canary', 'rip-control'],
+    excludeTags: [],
+    baseConfidence: 'high',
+    reason: 'Seccomp blocks execve → SROP chains open/read/write via consecutive sigreturn frames',
+    requiredLeaks: ['flag path'],
+    suggestedTools: ['pwntools SigreturnFrame', 'seccomp-tools'],
+  },
+
+  // BROP Rules
+  {
+    name: 'BROP (Blind ROP)',
+    techniqueId: 'brop',
+    requiredTags: ['stack-bof', 'network'],
+    boostTags: ['no-pie', 'nx-enabled'],
+    excludeTags: ['pie', 'symbols'],
+    baseConfidence: 'medium',
+    reason: 'Remote forking server with BOF → brute-force gadgets → dump binary → build exploit',
+    requiredLeaks: [],
+    suggestedTools: ['pwntools', 'custom BROP scanner'],
+  },
+
+  // Stack Pivot
+  {
+    name: 'Stack Pivot (leave;ret)',
+    techniqueId: 'stack_pivot',
+    requiredTags: ['stack-bof', 'rip-control'],
+    boostTags: ['nx-enabled', 'info-leak'],
+    excludeTags: [],
+    baseConfidence: 'medium',
+    reason: 'Small overflow space → pivot RSP to controlled memory for full ROP chain',
+    requiredLeaks: ['writable memory address for fake stack'],
+    suggestedTools: ['ROPgadget (leave;ret)', 'pwndbg vmmap'],
+  },
+
+  // UAF Rules
+  {
+    name: 'UAF → VTable Hijack',
+    techniqueId: 'use_after_free',
+    requiredTags: ['uaf'],
+    boostTags: ['info-leak', 'heap-vuln'],
+    excludeTags: ['static'],
+    baseConfidence: 'high',
+    reason: 'UAF on C++ object → reallocate controlled data → overwrite vtable pointer → redirect virtual call',
+    requiredLeaks: ['heap address'],
+    suggestedTools: ['pwndbg heap', 'pwntools'],
+  },
+  {
+    name: 'UAF → Tcache Metadata Corruption',
+    techniqueId: 'use_after_free',
+    requiredTags: ['uaf', 'glibc-mid'],
+    boostTags: ['heap-vuln', 'info-leak'],
+    excludeTags: ['static', 'glibc-old'],
+    baseConfidence: 'high',
+    reason: 'UAF in tcache range → corrupt fd pointer → tcache poisoning → arbitrary allocation',
+    requiredLeaks: ['heap address (for safe-linking if 2.32+)'],
+    suggestedTools: ['pwndbg bins', 'pwntools'],
+  },
+
+  // Tcache Stashing
+  {
+    name: 'Tcache Stashing Unlink',
+    techniqueId: 'tcache_stashing',
+    requiredTags: ['heap-vuln', 'glibc-mid'],
+    boostTags: ['uaf', 'heap-overflow', 'arb-write'],
+    excludeTags: ['static', 'glibc-old'],
+    baseConfidence: 'medium',
+    reason: 'Heap vuln + glibc 2.26-2.31 + calloc usage → corrupt smallbin bk → arbitrary write via stashing',
+    requiredLeaks: ['heap address', 'libc base'],
+    suggestedTools: ['pwndbg bins', 'pwntools'],
+  },
+
+  // eBPF Exploit
+  {
+    name: 'eBPF Verifier Bypass',
+    techniqueId: 'ebpf_exploit',
+    requiredTags: ['heap-vuln'],
+    boostTags: ['arb-read', 'arb-write'],
+    excludeTags: [],
+    baseConfidence: 'low',
+    reason: 'Requires CAP_BPF and vulnerable kernel → verifier bug → load malicious BPF → kernel R/W',
+    requiredLeaks: ['kernel base (KASLR)'],
+    suggestedTools: ['custom BPF bytecode assembler', 'exploit-db'],
+  },
+
+  // Kernel Priv Esc
+  {
+    name: 'modprobe_path Overwrite',
+    techniqueId: 'modprobe_path',
+    requiredTags: ['arb-write'],
+    boostTags: ['seccomp'],
+    excludeTags: [],
+    baseConfidence: 'medium',
+    reason: 'Arbitrary kernel write → overwrite modprobe_path → trigger unknown binary → root shell',
+    requiredLeaks: ['kernel base'],
+    suggestedTools: ['kernel exploit (C)', 'pwntools'],
+  },
+  {
+    name: 'Kernel ROP Chain',
+    techniqueId: 'kernel_rce',
+    requiredTags: ['arb-write', 'rip-control'],
+    boostTags: ['info-leak'],
+    excludeTags: [],
+    baseConfidence: 'low',
+    reason: 'Kernel arbitrary execution → ROP chain → commit_creds(prepare_kernel_cred(0)) → root',
+    requiredLeaks: ['kernel base (KASLR bypass)'],
+    suggestedTools: ['ROPgadget (on vmlinux)', 'pwntools'],
+  },
+
+  // ret2csu
+  {
+    name: 'ret2csu (no pop rdx available)',
+    techniqueId: 'ret2csu',
+    requiredTags: ['stack-bof', 'dynamic'],
+    boostTags: ['nx-enabled', 'no-canary'],
+    excludeTags: ['static'],
+    baseConfidence: 'high',
+    reason: 'x64 ELF, no pop rdx gadget → use __libc_csu_init to control rdx/rsi/rdi',
+    requiredLeaks: [],
+    suggestedTools: ['ropper', 'pwntools', 'objdump'],
+  },
+
+  // ret2dlresolve
+  {
+    name: 'ret2dl-resolve (no libc leak)',
+    techniqueId: 'ret2dlresolve',
+    requiredTags: ['stack-bof', 'no-pie', 'dynamic'],
+    boostTags: ['no-relro', 'partial-relro'],
+    excludeTags: ['full-relro', 'static'],
+    baseConfidence: 'medium',
+    reason: 'No PIE + dynamic + writable GOT → forge reloc/sym/strtab → resolve system() without leak',
+    requiredLeaks: [],
+    suggestedTools: ['pwntools Ret2dlresolvePayload', 'readelf'],
+  },
 ];
 
 // ─── RECOMMENDATION ENGINE ───
