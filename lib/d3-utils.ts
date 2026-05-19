@@ -13,8 +13,12 @@ export interface TreeLink {
   target: TreeNode;
 }
 
-export const buildHierarchy = (rootId: string, techniques: Record<string, Technique>) => {
-  const buildNode = (id: string): Technique & { children?: (Technique & { children?: any })[] } => {
+export const buildHierarchy = (
+  rootId: string, 
+  techniques: Record<string, Technique>,
+  collapsedNodes: Set<string> = new Set()
+) => {
+  const buildNode = (id: string): any => {
     const tech = techniques[id];
     if (!tech) {
       // Return empty placeholder if technique doesn't exist
@@ -33,12 +37,23 @@ export const buildHierarchy = (rootId: string, techniques: Record<string, Techni
       };
     }
 
+    const hasRealChildren = tech.children && tech.children.length > 0;
+
+    if (collapsedNodes.has(id) && hasRealChildren) {
+      return {
+        ...tech,
+        _hasChildren: true
+      };
+    }
+
     const children = tech.children
       ?.filter((childId) => techniques[childId])
       .map((childId) => buildNode(childId));
+
     return {
       ...tech,
       ...(children && children.length > 0 && { children }),
+      _hasChildren: hasRealChildren
     };
   };
 
