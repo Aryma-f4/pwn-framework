@@ -204,10 +204,39 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     format: [],
     heap: [],
     sandbox: [],
-    description: 'Systematic approaches to gathering information about a target binary',
+    description: 'The critical first step of exploitation: analyzing the binary to find vulnerabilities and constraints',
     prerequisites: [],
     constraints: [],
-    blueprint: 'recon_methodology() {\n  run("file ./binary");\n  run("checksec ./binary");\n  open_in_ghidra_or_ida();\n  attach_pwndbg();\n}',
+    blueprint: `RECONNAISSANCE & TRIAGE WORKFLOW
+================================
+
+Phase 1: Binary Identification
+------------------------------
+$ file ./target
+  # Look for: 32-bit vs 64-bit, LSB/MSB, dynamically vs statically linked, and stripped vs not stripped.
+  # If stripped, you will lack function names in debuggers/decompilers.
+
+Phase 2: Security Mitigations (checksec)
+----------------------------------------
+$ checksec --file=./target
+  # NX (No-eXecute): If enabled, you cannot execute shellcode on the stack. You must use ROP.
+  # PIE (Position Independent Executable): If enabled, binary addresses are randomized. You need an info leak to find the base address.
+  # Canary: If enabled, buffer overflows will crash before returning. You must leak the canary or bypass it.
+  # RELRO (Relocation Read-Only): If Full, GOT overwrite is impossible. If Partial, GOT overwrite is allowed.
+
+Phase 3: Basic Execution & Behavioral Testing
+-------------------------------------------
+1. Run normally: $ ./target
+2. Fuzz input length: Input 500 'A's. Does it segfault?
+3. Fuzz format strings: Input '%p %p %p %p' or '%x-%x'. Does it leak memory addresses?
+4. Integer edge cases: Input negative numbers (-1) or large numbers (4294967295).
+
+Phase 4: Environment Replication
+------------------------------
+If given a libc.so.6 and ld-linux.so:
+$ pwninit --bin ./target --libc ./libc.so.6 --ld ./ld.so
+$ patchelf --set-interpreter ./ld.so --set-rpath ./ ./target
+  # This ensures your local offsets perfectly match the remote CTF server!`,
     children: ['static_analysis', 'dynamic_analysis'],
   },
 
@@ -222,7 +251,32 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     description: 'Analyzing the binary without executing it (disassembly, decompilation, structure analysis)',
     prerequisites: ['Binary file access'],
     constraints: ['Obfuscation/packing can hinder analysis'],
-    blueprint: '1. checksec\n2. strings / rabin2\n3. IDA Pro / Ghidra',
+    blueprint: `STATIC ANALYSIS (GHIDRA / IDA / RADARE2)
+========================================
+
+Phase 1: Deep String & Symbol Analysis
+--------------------------------------
+$ strings -n 8 ./target | grep -i "flag\\|sh\\|bin\\|system"
+  # Search for backdoor functions or hardcoded secrets.
+$ readelf -s ./target
+  # List all symbols. Look for suspicious functions like 'win', 'give_shell', 'debug'.
+$ objdump -M intel -d ./target | less
+  # Quick CLI disassembly (Intel syntax).
+
+Phase 2: Decompilation (Ghidra/IDA)
+-----------------------------------
+1. Import binary and let the auto-analysis run.
+2. If the binary is stripped, start at the 'entry' point (usually _start), find the first argument passed to __libc_start_main, which is main().
+3. Rename the function to 'main'.
+4. Rename all local variables (e.g., local_10 -> buffer, local_14 -> counter).
+5. Retype variables (e.g., change 'undefined4' to 'int', 'undefined8*' to 'char*').
+
+Phase 3: Vulnerability Hunting
+------------------------------
+- Stack Overflows: Look for gets(buf), scanf("%s", buf), strcpy(buf, input), or read(0, buf, size) where size > buf_size.
+- Format Strings: Look for printf(buf) instead of printf("%s", buf).
+- Off-by-ones: Look for loops like \`for(int i=0; i <= size; i++)\` (<= instead of <).
+- Type confusions: Look for \`int size = read(); if (size < 10)\`, but size is signed and can be negative, bypassing the check but wrapping to a huge number in memcpy/read.`,
     children: [],
   },
 
@@ -234,10 +288,50 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     format: [],
     heap: [],
     sandbox: [],
-    description: 'Observing the binary\'s behavior during execution (debugging, tracing)',
+    description: 'Observing the binary\\'s behavior during execution (debugging, tracing)',
     prerequisites: ['Execution environment', 'Debugger'],
     constraints: ['Anti-debugging techniques'],
-    blueprint: '1. ltrace / strace\n2. GDB + pwndbg\n3. Fuzzing',
+    blueprint: `DYNAMIC ANALYSIS & DEBUGGING (GDB/PWNDBG)
+=========================================
+
+Phase 1: Dynamic Tracing
+------------------------
+$ strace -i -v ./target
+  # See exactly what system calls the binary executes (open, read, execve, mmap).
+$ ltrace ./target
+  # See what library functions are called and with what arguments (e.g., strcmp, malloc, puts).
+
+Phase 2: GDB Setup & Breakpoints
+--------------------------------
+$ gdb ./target
+gdb> break main
+gdb> break *main+142    # Break at a specific instruction offset (useful if stripped)
+gdb> run                # Start execution
+gdb> continue           # Continue after breakpoint
+
+Phase 3: Analyzing State (Pwndbg/GEF)
+-------------------------------------
+gdb> context            # Print registers, disasm, and stack view
+gdb> x/40wx $rsp        # Examine 40 words (hex) at the stack pointer
+gdb> x/10gx $rbp-0x20   # Examine 10 giant words at a specific offset
+gdb> vmmap              # View memory permissions (look for 'rwx' or libc base)
+gdb> search -p "/bin/sh"# Search memory for the "/bin/sh" string
+gdb> info frame         # View current stack frame details (saved RIP, RBP)
+
+Phase 4: Crash Analysis & Offset Finding
+----------------------------------------
+gdb> cyclic 200         # Generate a cyclic pattern of 200 bytes
+gdb> run                # Paste the pattern when prompted for input
+# Binary crashes (SIGSEGV). Look at the instruction pointer (RIP) or stack pointer (RSP).
+gdb> cyclic -l $rsp     # If RSP points to pattern 'jaaa', this command outputs the exact padding offset!
+
+Phase 5: Exploitation Setup (Pwntools)
+--------------------------------------
+# In your exploit.py:
+gdb.attach(p, '''
+break main
+continue
+''')`,
     children: [],
   },
 
