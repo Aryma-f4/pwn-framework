@@ -1,7 +1,7 @@
 export interface Technique {
   id: string;
   name: string;
-  category: 'recon' | 'mitigation' | 'technique' | 'leaf';
+  category: 'recon' | 'mitigation' | 'technique' | 'leaf' | 'setup';
   stack: string[];
   format: string[];
   heap: string[];
@@ -26,7 +26,7 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     prerequisites: [],
     constraints: [],
     blueprint: 'framework.init() {\n  analyze_target();\n  identify_vulns();\n  develop_exploit();\n}',
-    children: ['buffer_overflow', 'format_string', 'heap_exploit', 'sandbox_escape', 'fsop_exploit', 'integer_exploits', 'mitigations_root', 'recon_tools_root'],
+    children: ['buffer_overflow', 'format_string', 'heap_exploit', 'sandbox_escape', 'fsop_exploit', 'integer_exploits', 'mitigations_root', 'recon_tools_root', 'setup_tools_root'],
   },
 
   // MITIGATIONS BRANCH
@@ -706,7 +706,7 @@ continue
     prerequisites: ['Heap overflow', 'Allocator implementation knowledge'],
     constraints: ['Heap layout control', 'Metadata accessible'],
     blueprint: 'heap_exploit() {\n  corrupt_heap_metadata();\n  trigger_allocator_vuln();\n  achieve_code_exec();\n}',
-    children: ['use_after_free', 'double_free', 'house_of_botcake', 'house_of_rabbit', 'house_of_roman', 'tcache_stashing', 'house_of_force', 'house_of_spirit', 'house_of_einherjar', 'unsorted_bin_attack', 'large_bin_attack'],
+    children: ['use_after_free', 'double_free', 'house_of_botcake', 'house_of_rabbit', 'house_of_roman', 'tcache_stashing', 'house_of_force', 'house_of_spirit', 'house_of_einherjar', 'unsorted_bin_attack', 'large_bin_attack', 'first_fit', 'poison_null_byte', 'house_of_husk', 'house_of_corrosion', 'house_of_apple', 'house_of_cat'],
   },
 
   use_after_free: {
@@ -923,6 +923,81 @@ continue
   c = calloc(1, size);  // BOOM: arbitrary write
 }`,
     children: ['heap_control'],
+  },
+
+  first_fit: {
+    id: 'first_fit',
+    name: 'First Fit (Malloc Reuse)',
+    category: 'technique',
+    stack: [],
+    format: [],
+    heap: ['heap-based'],
+    sandbox: [],
+    description: 'Foundational heap behavior: malloc returns the most recently freed chunk of matching size (LIFO). Understanding this is essential for UAF, double-free, and tcache poisoning attacks.',
+    prerequisites: ['Ability to allocate and free chunks of same size', 'Observation of malloc reuse behavior'],
+    constraints: ['Purely educational — no direct exploit', 'LIFO only for fastbins and tcache'],
+    blueprint: 'first_fit() {\n  a = malloc(0x60);\n  free(a);\n  c = malloc(0x60);  // c == a\n  // type confusion: c overwrites stale a\n}',
+    children: [],
+  },
+
+  poison_null_byte: {
+    id: 'poison_null_byte',
+    name: 'Poison Null Byte',
+    category: 'technique',
+    stack: [],
+    format: [],
+    heap: ['heap-based'],
+    sandbox: [],
+    description: 'Off-by-one null byte overflow that clears PREV_IN_USE and forges prev_size, causing backward coalescing and overlapping chunks.',
+    prerequisites: ['Off-by-one null byte vulnerability', 'Chunk layout control', 'Understanding of PREV_IN_USE and coalescing'],
+    constraints: ['Glibc 2.29+ adds harder checks', 'Single null byte only'],
+    blueprint: 'poison_null() {\n  overflow_null_into_next();\n  clear_prev_in_use();\n  forge_prev_size();\n  free(next);  // backward coalesce to fake chunk\n}',
+    children: [],
+  },
+
+  house_of_husk: {
+    id: 'house_of_husk',
+    name: 'House of Husk',
+    category: 'technique',
+    stack: [],
+    format: [],
+    heap: ['heap-based'],
+    sandbox: [],
+    description: 'Corrupts __printf_function_table to redirect execution through crafted printf format specifier dispatch.',
+    prerequisites: ['Libc leak', 'Heap overflow/UAF to write to libc tables', 'Binary uses printf with format specifiers'],
+    constraints: ['Requires libc leak', 'Glibc 2.23-2.31', 'Affected by safe-linking in 2.32+'],
+    blueprint: 'husk() {\n  leak_libc();\n  corrupt_printf_function_table();\n  set_arginfo_to_one_gadget();\n  printf("%X");  // triggers one_gadget\n}',
+    children: [],
+  },
+
+  house_of_corrosion: {
+    id: 'house_of_corrosion',
+    name: 'House of Corrosion',
+    category: 'technique',
+    stack: [],
+    format: [],
+    heap: ['heap-based'],
+    sandbox: [],
+    description: 'Shrinks top chunk via overflow, then allocates to reach __free_hook or other global variables for arbitrary write.',
+    prerequisites: ['Heap overflow reaching top chunk', 'Distance calculation to target', 'Glibc < 2.32 for __free_hook'],
+    constraints: ['Must know approximate heap-to-target distance', 'Top chunk must be accessible via overflow'],
+    blueprint: 'corrosion() {\n  top_chunk->size = 1;\n  malloc(distance_to_free_hook);\n  hook_chunk = malloc(0x10);\n  *hook_chunk = one_gadget;\n  free("/bin/sh");\n}',
+    children: [],
+  },
+
+  house_of_cat: {
+    id: 'house_of_cat',
+    name: 'House of Cat',
+    category: 'technique',
+    stack: [],
+    format: [],
+    heap: ['heap-based'],
+    sandbox: [],
+    description: 'Modern FSOP technique for glibc 2.35+: corrupts _IO_wide_data vtable to bypass vtable verification and redirect execution through _IO_wfile_overflow.',
+    prerequisites: ['Libc leak', 'Controlled write to _IO_FILE._wide_data', 'Exit or IO flush trigger'],
+    constraints: ['Requires libc leak', 'Must stay within _IO_wfile_jumps range', 'Complex fake struct setup'],
+    blueprint: 'cat() {\n  corrupt_wide_data_ptr();\n  set_wide_vtable_to_wfile_jumps();\n  set_flags_for_wide_path();\n  exit(0);  // triggers _IO_wfile_overflow → one_gadget\n}',
+    children: [],
   },
 
   // FSOP BRANCH
@@ -1302,6 +1377,356 @@ continue
   *(chunk_a + chunk_a_size + 1) = fake_prev_size;
 }`,
     children: ['stack_pivot', 'house_of_einherjar'],
+  },
+
+  // SETUP TOOLS BRANCH
+  setup_tools_root: {
+    id: 'setup_tools_root',
+    name: 'Environment Setup',
+    category: 'recon',
+    stack: [],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'Essential tools and environment setup for binary exploitation. Install these before starting any pwn challenge.',
+    prerequisites: ['Linux system (Ubuntu 20.04/22.04 recommended or WSL2)', 'Python 3.8+', 'Basic terminal proficiency'],
+    constraints: ['Some tools require specific OS/architecture', 'IDA requires license for full features'],
+    blueprint: 'setup_environment() {\n  install_gdb_pwndbg();\n  install_pwntools();\n  install_ghidra();\n  install_checksec();\n  configure_libc_databases();\n}',
+    children: ['setup_gdb', 'setup_pwntools', 'setup_ghidra', 'setup_ida', 'setup_checksec', 'setup_ropper', 'setup_libc_db', 'setup_seccomp_tools', 'setup_patchelf', 'setup_qemu'],
+  },
+
+  setup_gdb: {
+    id: 'setup_gdb',
+    name: 'GDB + pwndbg',
+    category: 'leaf',
+    stack: [],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'GDB enhanced with pwndbg — the most important debugging tool for pwn. Provides heap visualization, context display, and exploit development helpers.',
+    prerequisites: ['GDB installed (apt install gdb)', 'Git for cloning pwndbg', 'Python3 dev headers'],
+    constraints: ['pwndbg requires Python 3.8+', 'Some features need gdb-multiarch for ARM/MIPS targets'],
+    blueprint: `# Install GDB + pwndbg
+sudo apt install gdb gdb-multiarch
+cd ~
+git clone https://github.com/pwndbg/pwndbg
+cd pwndbg
+./setup.sh
+
+# Verify
+gdb ./binary
+# pwndbg> checksec
+# pwndbg> vmmap
+# pwndbg> heap chunks
+# pwndbg> telescope $rsp 20`,
+    children: [],
+  },
+
+  setup_pwntools: {
+    id: 'setup_pwntools',
+    name: 'pwntools',
+    category: 'leaf',
+    stack: [],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'Python exploit development library — cyclic pattern generation, ROP chain building, tube abstraction for local/remote connections, and ELF parsing.',
+    prerequisites: ['Python 3.8+ with pip', 'Linux system (WSL2 on Windows)'],
+    constraints: ['Some features (ASM, shellcraft) require binutils for target architecture'],
+    blueprint: `# Install pwntools
+pip3 install pwntools
+
+# Optional: install additional dependencies
+sudo apt install binutils-arm-linux-gnueabihf  # ARM support
+sudo apt install binutils-mips-linux-gnu        # MIPS support
+
+# Verify
+python3 -c "from pwn import *; print('pwntools OK')"
+
+# Common pwntools patterns
+from pwn import *
+context.arch = 'amd64'
+p = process('./binary')        # local
+p = remote('host', 1337)       # remote
+payload = cyclic(200)          # pattern
+e = ELF('./binary')            # parse ELF`,
+    children: [],
+  },
+
+  setup_ghidra: {
+    id: 'setup_ghidra',
+    name: 'Ghidra',
+    category: 'leaf',
+    stack: [],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'Free NSA reverse engineering suite — decompiler, disassembler, and scriptable analysis. Essential for understanding binary logic when source is unavailable.',
+    prerequisites: ['Java JDK 17+', '4GB+ RAM for large binaries', 'Linux/macOS/Windows'],
+    constraints: ['GUI required for full features', 'Headless mode available for scripting'],
+    blueprint: `# Install Ghidra
+sudo apt install default-jdk
+cd ~
+wget https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra11.2.1_build/ghidra_11.2.1_PUBLIC.zip
+unzip ghidra_11.2.1_PUBLIC.zip
+cd ghidra_11.2.1_PUBLIC
+./ghidraRun
+
+# Headless analysis (scriptable)
+analyzeHeadless /tmp/project Binary \\
+  -import ./binary -postScript MyScript.java
+
+# Common workflow:
+# 1. Import binary → Auto-Analyze
+# 2. Search → Strings (find /bin/sh, flag paths)
+# 3. Window → Functions (find vuln functions)
+# 4. Decompile main(), handlers, read(), gets()`,
+    children: [],
+  },
+
+  setup_ida: {
+    id: 'setup_ida',
+    name: 'IDA Pro',
+    category: 'leaf',
+    stack: [],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'Industry-standard disassembler and decompiler (Hex-Rays). Best-in-class decompilation, FLIRT signature matching, and plugin ecosystem. Free version available (IDA Free).',
+    prerequisites: ['IDA Pro license (paid) or IDA Free (limited)', 'Windows/Linux/macOS', 'Python 3 for IDAPython scripting'],
+    constraints: ['IDA Free does not include Hex-Rays decompiler', 'No ARM/MIPS in free version', 'Paid version needed for full feature set'],
+    blueprint: `# IDA Pro setup
+# 1. Download from https://hex-rays.com/ida-pro/
+# 2. Install and activate license
+# 3. Install Hex-Rays decompiler (amd64/arm')
+
+# IDAPython scripting essentials
+import idautils, idc, idaapi
+
+# Find all calls to dangerous functions
+for func_ea in idautils.Functions():
+    name = idc.get_func_name(func_ea)
+    if name in ['gets', 'strcpy', 'sprintf', 'read']:
+        for xref in idautils.XrefsTo(func_ea):
+            print(f"  {name} called at 0x{xref.frm:X}")
+
+# Recommended plugins:
+# - LazyIDA: copy-paste helpers
+# - Keypatch: assemble/patch instructions
+# - FindCrypt: identify crypto constants`,
+    children: [],
+  },
+
+  setup_checksec: {
+    id: 'setup_checksec',
+    name: 'checksec',
+    category: 'leaf',
+    stack: [],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'Binary protection checker — reports NX, PIE, Canary, RELRO, ASLR status. Always run this first on any target binary.',
+    prerequisites: ['None (standalone binary)', 'Python 3 for pwntools version'],
+    constraints: ['checksec from checksec.sh is different from pwntools checksec'],
+    blueprint: `# Install checksec
+# Option 1: pwntools version (recommended)
+pip3 install pwntools
+# Then: pwn checksec ./binary
+
+# Option 2: standalone script
+sudo apt install checksec
+
+# Usage
+checksec --file=./binary
+# Output: NX, PIE, Canary, RELRO status
+
+# pwntools version (more detailed)
+pwn checksec ./binary
+
+# In Python:
+from pwn import *
+e = ELF('./binary')
+print(f"NX: {e.execstack}")        # No-Execute
+print(f"PIE: {e.pie}")             # Position Independent
+print(f"Canary: {e.canary}")       # Stack canary
+print(f"RELRO: {e.relro}")         # RELRO level`,
+    children: [],
+  },
+
+  setup_ropper: {
+    id: 'setup_ropper',
+    name: 'ROPgadget + ropper',
+    category: 'leaf',
+    stack: [],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'ROP gadget search tools — find gadgets for building ROP chains. ROPgadget is the classic, ropper provides cleaner output and chain building.',
+    prerequisites: ['capstone (pip install capstone) for ropper', 'Binary to search'],
+    constraints: ['Gadget quality depends on binary size and compiler', 'Some gadgets may be unreachable'],
+    blueprint: `# Install
+pip3 install ropper
+sudo apt install ruby && gem install one_gadget
+
+# ROPgadget (comes with pwntools)
+ROPgadget --binary ./binary --ropchain
+
+# ropper
+ropper --file ./binary --search "pop rdi; ret"
+ropper --file ./binary --chain "execve"
+
+# one_gadget (libc one-shot RCE)
+one_gadget /lib/x86_64-linux-gnu/libc.so.6
+
+# pwntools ROP
+from pwn import *
+rop = ROP(ELF('./binary'))
+rop.call('system', ['/bin/sh'])
+print(rop.dump())`,
+    children: [],
+  },
+
+  setup_libc_db: {
+    id: 'setup_libc_db',
+    name: 'libc-database',
+    category: 'leaf',
+    stack: [],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'Offline libc fingerprint database — identify exact libc version from leaked function offsets. Critical for remote exploitation where the target libc differs from local.',
+    prerequisites: ['Git', 'Disk space (~2GB for full database)', 'Internet for initial download'],
+    constraints: ['Database must be updated periodically for new libc versions', 'Online alternative: libc.rip'],
+    blueprint: `# Install libc-database
+cd ~
+git clone https://github.com/niklasb/libc-database
+cd libc-database
+
+# Download common libc versions (takes time)
+./get ubuntu           # Ubuntu libc versions
+./get debian           # Debian libc versions
+
+# Identify libc from leaked offsets
+./identify leaked_printf_offset
+# Example: ./identify printf 0x7f1234567890
+
+# Find symbols in identified libc
+./dump libc_id system "/bin/sh"
+# Output: system offset, /bin/sh offset, one_gadget offsets
+
+# Online alternative: https://libc.rip
+# Provide 2+ function offsets → exact libc match
+
+# pwntools integration
+from pwn import *
+libc = ELF('./identified_libc.so')
+system = libc.symbols['system']
+binsh = next(libc.search(b'/bin/sh'))`,
+    children: [],
+  },
+
+  setup_seccomp_tools: {
+    id: 'setup_seccomp_tools',
+    name: 'seccomp-tools',
+    category: 'leaf',
+    stack: [],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'Dump and analyze seccomp-BPF filter rules. Determine which syscalls are allowed/blocked before building exploit chains (open+read+write vs execve).',
+    prerequisites: ['Ruby installed (apt install ruby)', 'Kernel with seccomp support'],
+    constraints: ['Must run on target binary or same architecture', 'Some CTFs modify BPF rules at runtime'],
+    blueprint: `# Install seccomp-tools
+gem install seccomp-tools
+
+# Dump seccomp rules of running binary
+seccomp-tools dump ./binary
+# Or with input:
+echo "input" | seccomp-tools dump ./binary
+
+# Common output interpretation:
+# ALLOW: open, read, write, exit  → ORW chain possible
+# ALLOW: openat, sendfile          → Alternative ORW
+# KILL:  execve                    → MUST use ORW, no shell
+
+# Build ORW chain if execve is blocked
+from pwn import *
+rop = ROP(elf)
+rop.call('open', ['./flag', 0])
+rop.call('read', [3, buf, 100])
+rop.call('write', [1, buf, 100])`,
+    children: [],
+  },
+
+  setup_patchelf: {
+    id: 'setup_patchelf',
+    name: 'patchelf + pwninit',
+    category: 'leaf',
+    stack: [],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'Patch ELF interpreter and RPATH to use the correct libc version locally. Essential for testing exploits with the same libc as the remote target.',
+    prerequisites: ['patchelf binary (apt install patchelf)', 'Target libc.so and ld-linux.so from remote', 'pwninit (pip install pwninit)'],
+    constraints: ['Must have matching libc.so and ld-linux for target architecture', 'Some glibc versions are incompatible'],
+    blueprint: `# Install
+sudo apt install patchelf
+pip3 install pwninit
+
+# Method 1: pwninit (automated, recommended)
+# Place: binary, libc.so.6, ld-linux-x86-64.so.2 in same dir
+pwninit
+# Auto-creates: ./binary_patched with correct interpreter
+
+# Method 2: Manual patchelf
+patchelf --set-interpreter ./ld-linux-x86-64.so.2 ./binary
+patchelf --set-rpath . ./binary
+
+# Verify
+ldd ./binary
+# Should show ./libc.so.6 as libc
+
+# Test locally
+./binary_patched  # uses target libc
+# Confirm with:
+pwn checksec ./binary_patched`,
+    children: [],
+  },
+
+  setup_qemu: {
+    id: 'setup_qemu',
+    name: 'QEMU + gdb-multiarch',
+    category: 'leaf',
+    stack: [],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'Emulate and debug ARM, MIPS, AArch64 binaries locally. Required for cross-architecture pwn challenges.',
+    prerequisites: ['QEMU user-mode emulator', 'gdb-multiarch', 'Target architecture binutils (arm, mips, aarch64)'],
+    constraints: ['QEMU user-mode only emulates user-space (no kernel exploits)', 'Some syscalls may differ from real hardware'],
+    blueprint: `# Install
+sudo apt install qemu-user qemu-user-static gdb-multiarch \\
+  binutils-arm-linux-gnueabihf binutils-mips-linux-gnu \\
+  binutils-aarch64-linux-gnu
+
+# Run ARM binary
+qemu-arm ./arm_binary
+qemu-arm -L /usr/arm-linux-gnueabihf ./arm_binary  # with sysroot
+
+# Debug with QEMU + GDB
+qemu-arm -g 1234 ./arm_binary &
+gdb-multiarch ./arm_binary
+# (gdb) set architecture arm
+# (gdb) target remote :1234
+
+# pwntools integration
+from pwn import *
+context.arch = 'arm'
+context.binary = ELF('./arm_binary')
+p = process(['qemu-arm', '-g', '1234', './arm_binary'])
+# Or:
+p = gdb.debug('./arm_binary', arch='arm')`,
+    children: [],
   },
 };
 

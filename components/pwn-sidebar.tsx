@@ -1,9 +1,11 @@
 'use client';
 
+import { useState } from 'react';
 import { Technique } from '@/lib/pwn-data';
 import { PwnSearch } from './pwn-search';
 import { FilterType } from '@/lib/pwn-filters';
-import { Pin, Search, Keyboard, HelpCircle } from 'lucide-react';
+import { ExploitWorkflow } from './exploit-workflow';
+import { Pin, Keyboard, HelpCircle } from 'lucide-react';
 
 interface PwnSidebarProps {
   onSearchChange: (matches: Set<string>, pathHighlight: Set<string>) => void;
@@ -11,6 +13,10 @@ interface PwnSidebarProps {
   visibleNodeCount: number;
   searchInputRef?: React.RefObject<HTMLInputElement>;
   pinnedTechniques?: Set<string>;
+  currentPhase?: string;
+  onPhaseChange?: (phaseId: string) => void;
+  completedPhases?: Set<string>;
+  onTogglePhase?: (phaseId: string) => void;
 }
 
 export function PwnSidebar({ 
@@ -18,10 +24,28 @@ export function PwnSidebar({
   onFilterChange, 
   visibleNodeCount,
   searchInputRef,
-  pinnedTechniques = new Set()
+  pinnedTechniques = new Set(),
+  currentPhase = 'recon',
+  onPhaseChange = () => {},
+  completedPhases = new Set(),
+  onTogglePhase = () => {},
 }: PwnSidebarProps) {
+  const [workflowCollapsed, setWorkflowCollapsed] = useState(false);
+
   return (
     <>
+      {/* Exploitation Workflow */}
+      <ExploitWorkflow
+        currentPhase={currentPhase}
+        onPhaseChange={onPhaseChange}
+        completedPhases={completedPhases}
+        onTogglePhase={onTogglePhase}
+        collapsed={workflowCollapsed}
+        onToggleCollapse={() => setWorkflowCollapsed(!workflowCollapsed)}
+      />
+
+      <div className="pwn-divider" />
+
       {/* Search and Filters */}
       <PwnSearch 
         onSearchChange={onSearchChange} 
@@ -79,6 +103,11 @@ export function PwnSidebar({
         <div className="pwn-legend-item">
           <div className="pwn-legend-dot bg-rose-500" />
           <span className="pwn-legend-label">Exploitation</span>
+        </div>
+
+        <div className="pwn-legend-item">
+          <div className="pwn-legend-dot" style={{ backgroundColor: '#38bdf8' }} />
+          <span className="pwn-legend-label">Tool Setup</span>
         </div>
       </div>
 

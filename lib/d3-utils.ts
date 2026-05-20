@@ -88,6 +88,8 @@ export const getCategoryColor = (category: string): string => {
       return '#f97316'; // neon orange - warning
     case 'leaf':
       return '#ff006e'; // neon magenta - exploitation/danger
+    case 'setup':
+      return '#38bdf8'; // sky blue - tool setup
     default:
       return '#9ca3af'; // muted gray
   }
@@ -109,6 +111,8 @@ export const calculateNodeRadius = (category: string): number => {
       return 6;
     case 'leaf':
       return 5;
+    case 'setup':
+      return 7;
     default:
       return 6;
   }

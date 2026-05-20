@@ -8,6 +8,7 @@ import { PwnTreeCanvas } from '@/components/pwn-tree-canvas';
 import { PwnSidebar } from '@/components/pwn-sidebar';
 import { PwnInspector } from '@/components/pwn-inspector';
 import { KeyboardHelpModal } from '@/components/keyboard-help-modal';
+import { WelcomeModal } from '@/components/exploit-workflow';
 import { ResizablePanel } from '@/components/resizable-panel';
 import '@/styles/pwn-dashboard.css';
 
@@ -17,14 +18,16 @@ export default function PwnExploitationDashboard() {
   const [pathHighlight, setPathHighlight] = useState<Set<string>>(new Set());
   const [activeFilter, setActiveFilter] = useState<FilterType | null>(null);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
+  const [showWelcome, setShowWelcome] = useState(true);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [pinnedTechniques, setPinnedTechniques] = useState<Set<string>>(new Set());
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [reconTags, setReconTags] = useState<Set<string>>(new Set());
+  const [currentPhase, setCurrentPhase] = useState<string>('recon');
+  const [completedPhases, setCompletedPhases] = useState<Set<string>>(new Set());
 
-  // Detect mobile breakpoint
   useEffect(() => {
     const mediaQuery = window.matchMedia('(max-width: 768px)');
     const handleChange = (e: MediaQueryListEvent | MediaQueryList) => {
@@ -48,7 +51,6 @@ export default function PwnExploitationDashboard() {
         const includedIds = new Set<string>();
         recommendations.forEach(r => includedIds.add(r.techniqueId));
 
-        // Add ancestors
         const addAncestors = (techId: string) => {
           for (const [key, tech] of Object.entries(PWN_TECHNIQUES)) {
             if (tech.children?.includes(techId)) {
@@ -61,7 +63,6 @@ export default function PwnExploitationDashboard() {
         };
         Array.from(includedIds).forEach(id => addAncestors(id));
 
-        // Add descendants for the originally matched nodes
         const addDescendants = (techId: string) => {
           const tech = PWN_TECHNIQUES[techId];
           if (tech && tech.children) {
@@ -75,7 +76,6 @@ export default function PwnExploitationDashboard() {
         };
         recommendations.forEach(r => addDescendants(r.techniqueId));
 
-        // Build filtered result
         const reconFiltered: Record<string, Technique> = {};
         includedIds.forEach(id => {
           if (techniques[id]) reconFiltered[id] = techniques[id];
@@ -90,6 +90,22 @@ export default function PwnExploitationDashboard() {
 
   const visibleNodeCount = Object.keys(filteredTechniques).length;
 
+  // Auto-detect phase based on selected node
+  useEffect(() => {
+    if (!selectedNode) return;
+    const phaseMap: Record<string, string> = {
+      root: 'recon',
+      recon: 'recon',
+      mitigation: 'bypass',
+      technique: 'exploit',
+      leaf: 'execute',
+    };
+    const newPhase = phaseMap[selectedNode.category] || 'recon';
+    if (newPhase !== currentPhase) {
+      setCurrentPhase(newPhase);
+    }
+  }, [selectedNode?.id]);
+
   const handleSearchChange = (matches: Set<string>, paths: Set<string>) => {
     setSearchMatches(matches);
     setPathHighlight(paths);
@@ -98,6 +114,19 @@ export default function PwnExploitationDashboard() {
   const handleFilterChange = (filterType: FilterType | null) => {
     setActiveFilter(filterType);
     setSelectedNode(null);
+  };
+
+  const handlePhaseChange = (phaseId: string) => {
+    setCurrentPhase(phaseId);
+  };
+
+  const handleTogglePhase = (phaseId: string) => {
+    setCompletedPhases(prev => {
+      const next = new Set(prev);
+      if (next.has(phaseId)) next.delete(phaseId);
+      else next.add(phaseId);
+      return next;
+    });
   };
 
   const closeMobileOverlays = useCallback(() => {
@@ -122,10 +151,13 @@ export default function PwnExploitationDashboard() {
     }
   }, [isMobile]);
 
-  // Keyboard shortcut handling
+  const handleStartReconFromWelcome = useCallback(() => {
+    setShowWelcome(false);
+    setSidebarOpen(true);
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Forward slash to focus search
       if (e.key === '/' && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
         if (isMobile) {
@@ -134,7 +166,6 @@ export default function PwnExploitationDashboard() {
         searchInputRef.current?.focus();
       }
       
-      // Escape to clear
       if (e.key === 'Escape') {
         e.preventDefault();
         if (sidebarOpen || inspectorOpen) {
@@ -148,13 +179,11 @@ export default function PwnExploitationDashboard() {
         }
       }
       
-      // Question mark for help
       if (e.key === '?' && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
         setShowKeyboardHelp(true);
       }
       
-      // Ctrl+P to pin technique
       if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
         e.preventDefault();
         if (selectedNode) {
@@ -173,10 +202,8 @@ export default function PwnExploitationDashboard() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedNode, pinnedTechniques, isMobile, sidebarOpen, inspectorOpen, closeMobileOverlays]);
 
-  // Highlight recommended techniques based on recon wizard selections
   useEffect(() => {
     if (reconTags.size === 0) {
-      // Only clear if the search input is empty to avoid stomping on manual searches
       if (searchInputRef.current?.value === '') {
         setSearchMatches(new Set());
         setPathHighlight(new Set());
@@ -199,7 +226,6 @@ export default function PwnExploitationDashboard() {
       }
     };
 
-    // Also highlight descendants of the matched nodes to ensure the whole sub-tree is bright
     const addDescendants = (techId: string) => {
       paths.add(techId);
       const tech = PWN_TECHNIQUES[techId];
@@ -221,6 +247,7 @@ export default function PwnExploitationDashboard() {
 
   return (
     <>
+      <WelcomeModal isOpen={showWelcome} onClose={() => setShowWelcome(false)} onStartRecon={handleStartReconFromWelcome} />
       <KeyboardHelpModal isOpen={showKeyboardHelp} onClose={() => setShowKeyboardHelp(false)} />
       <div className="pwn-container">
         {/* Header */}
@@ -239,6 +266,14 @@ export default function PwnExploitationDashboard() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowWelcome(true)}
+              className="pwn-header-btn"
+              title="Show welcome guide"
+            >
+              <span className="hidden sm:inline">Guide</span>
+              <span className="sm:hidden">?</span>
+            </button>
             <button
               onClick={() => setShowKeyboardHelp(true)}
               className="pwn-header-btn"
@@ -298,6 +333,10 @@ export default function PwnExploitationDashboard() {
               visibleNodeCount={visibleNodeCount}
               searchInputRef={searchInputRef}
               pinnedTechniques={pinnedTechniques}
+              currentPhase={currentPhase}
+              onPhaseChange={handlePhaseChange}
+              completedPhases={completedPhases}
+              onTogglePhase={handleTogglePhase}
             />
           </div>
 

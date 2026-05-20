@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Copy, Check, ExternalLink, Github, BookOpen, Search, AlertCircle, FileText, ListChecks, Link2, Database, Layers, Target, FolderOpen } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { Copy, Check, ExternalLink, Github, BookOpen, Search, AlertCircle, FileText, ListChecks, Link2, Database, Layers, Target, FolderOpen, ChevronRight, Zap, Shield, Eye, Crosshair, Flag } from 'lucide-react';
 import { Technique } from '@/lib/pwn-data';
 import { getTechniqueKB } from '@/lib/pwn-unified-data';
 import { getHeapReferenceForTechnique } from '@/lib/heap-reference-mapping';
@@ -10,6 +10,7 @@ import { SessionManager } from './session-manager';
 import { useSessions, ChecklistItem } from '@/lib/use-sessions';
 import { ReconWizard } from './recon-wizard';
 import { ExploitRecommender } from './exploit-recommender';
+import { TECHNIQUE_TOOLTIPS } from '@/lib/interactive-utils';
 
 interface PwnInspectorProps {
   selectedNode: Technique | null;
@@ -20,12 +21,76 @@ interface PwnInspectorProps {
 
 type TabType = 'overview' | 'prerequisites' | 'constraints' | 'blueprint' | 'precond' | 'exploits' | 'checklist' | 'refs' | 'heap' | 'resources' | 'sessions' | 'recon';
 
+const CATEGORY_PHASE_MAP: Record<string, string> = {
+  root: 'recon',
+  recon: 'recon',
+  mitigation: 'bypass',
+  technique: 'exploit',
+  leaf: 'execute',
+  setup: 'recon',
+};
+
+function getDifficultyBadge(category: string, hasKB: boolean) {
+  if (category === 'root') return null;
+  if (category === 'recon') return { label: 'Recon', cls: 'beginner' };
+  if (category === 'mitigation') return { label: 'Defense', cls: 'intermediate' };
+  if (category === 'technique') return { label: 'Attack', cls: 'advanced' };
+  if (category === 'leaf') return { label: 'Exploit', cls: 'expert' };
+  if (category === 'setup') return { label: 'Setup', cls: 'beginner' };
+  return null;
+}
+
+function getPhaseTag(phase: string) {
+  const phases: Record<string, { label: string; cls: string }> = {
+    recon: { label: 'Phase 1: Recon', cls: 'recon' },
+    vuln: { label: 'Phase 2: Vuln ID', cls: 'vuln' },
+    bypass: { label: 'Phase 3: Bypass', cls: 'bypass' },
+    exploit: { label: 'Phase 4: Exploit', cls: 'exploit' },
+    execute: { label: 'Phase 5: Pwn', cls: 'execute' },
+  };
+  return phases[phase] || null;
+}
+
+function getNextStepsForNode(node: Technique): { step: string; phase: string; id?: string }[] {
+  const steps: { step: string; phase: string; id?: string }[] = [];
+  const phase = CATEGORY_PHASE_MAP[node.category] || 'recon';
+
+  if (node.category === 'root' || node.category === 'recon') {
+    steps.push({ step: 'Run checksec on the binary', phase: 'recon' });
+    steps.push({ step: 'Identify the vulnerability type', phase: 'vuln' });
+    if (node.children && node.children.length > 0) {
+      steps.push({ step: `Explore ${node.children.length} sub-techniques`, phase: 'exploit', id: node.children[0] });
+    }
+  } else if (node.category === 'setup') {
+    steps.push({ step: 'Follow the installation steps below', phase: 'recon' });
+    steps.push({ step: 'Verify tool works with test binary', phase: 'recon' });
+  } else if (node.category === 'mitigation') {
+    steps.push({ step: 'Check if this protection is enabled', phase: 'recon' });
+    steps.push({ step: 'Find a bypass strategy', phase: 'bypass' });
+    if (node.children && node.children.length > 0) {
+      steps.push({ step: `Try ${node.children[0].replace(/-/g, ' ')}`, phase: 'bypass', id: node.children[0] });
+    }
+  } else if (node.category === 'technique') {
+    steps.push({ step: 'Verify preconditions are met', phase: 'exploit' });
+    steps.push({ step: 'Review exploitation paths below', phase: 'exploit' });
+    if (node.children && node.children.length > 0) {
+      steps.push({ step: `Choose an execution path`, phase: 'exploit', id: node.children[0] });
+    }
+  } else if (node.category === 'leaf') {
+    steps.push({ step: 'Build the exploit payload', phase: 'execute' });
+    steps.push({ step: 'Test locally with ASLR off', phase: 'execute' });
+    steps.push({ step: 'Send to remote target', phase: 'execute' });
+  }
+
+  return steps;
+}
+
 const TAB_ICONS: Record<TabType, React.ReactNode> = {
   overview: <FileText size={12} />,
   prerequisites: <AlertCircle size={12} />,
   constraints: <AlertCircle size={12} />,
   blueprint: <Database size={12} />,
-  precond: <AlertCircle size={12} />,
+  precond: <Eye size={12} />,
   exploits: <Target size={12} />,
   checklist: <ListChecks size={12} />,
   refs: <Link2 size={12} />,
@@ -40,11 +105,9 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
   const [copiedTab, setCopiedTab] = useState<string | null>(null);
   const { sessions, activeSessionId, setActiveSessionId, createSession, deleteSession, renameSession, updateChecklistItem, setChecklist, getActiveSession, isLoaded } = useSessions();
   
-  // Initialize session when technique changes
   useEffect(() => {
     if (selectedNode && selectedNode.id !== 'root' && isLoaded) {
       const activeSession = getActiveSession();
-      // If no session or different technique, create one
       if (!activeSession || activeSession.technique !== selectedNode.id) {
         const defaultChecklist: ChecklistItem[] = [];
         if (getTechniqueKB(selectedNode.id)?.operatorChecklist) {
@@ -60,12 +123,28 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
     }
   }, [selectedNode?.id, isLoaded]);
 
+  // Reset to overview tab when node changes
+  useEffect(() => {
+    setActiveTab('overview');
+  }, [selectedNode?.id]);
+
+  const nextSteps = useMemo(() => {
+    if (!selectedNode) return [];
+    return getNextStepsForNode(selectedNode);
+  }, [selectedNode]);
+
+  const handleNextStepClick = (stepId?: string) => {
+    if (stepId && onSelectTechniqueById) {
+      onSelectTechniqueById(stepId);
+    }
+  };
+
   if (!selectedNode || selectedNode.id === 'root') {
     return (
       <div className="pwn-inspector">
         <div className="pwn-inspector-header">
           <div className="pwn-inspector-title flex items-center gap-2">
-            <Search size={16} className="text-cyan-400" />
+            <Eye size={16} className="text-cyan-400" />
             Pre-Pwn Recon
           </div>
         </div>
@@ -78,9 +157,12 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
     );
   }
 
-  // Get knowledge base entry for this technique
   const kbEntry = getTechniqueKB(selectedNode.id);
   const hasKB = !!kbEntry;
+  const difficultyBadge = getDifficultyBadge(selectedNode.category, hasKB);
+  const phase = CATEGORY_PHASE_MAP[selectedNode.category] || 'recon';
+  const phaseTag = getPhaseTag(phase);
+  const tooltip = TECHNIQUE_TOOLTIPS[selectedNode.id];
 
   const handleCopy = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -114,6 +196,31 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
                 <p className="pwn-card-title">Class</p>
                 <p className="text-gray-300 text-sm">{kbEntry.class}</p>
               </div>
+
+              {/* Next Steps */}
+              {nextSteps.length > 0 && (
+                <div className="pwn-card">
+                  <div className="flex items-center gap-1.5 mb-2.5">
+                    <ChevronRight size={12} className="text-cyan-400" />
+                    <p className="pwn-card-title mb-0">Recommended Next Steps</p>
+                  </div>
+                  <div className="pwn-next-steps">
+                    {nextSteps.map((step, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => handleNextStepClick(step.id)}
+                        className={`pwn-next-step-item ${step.id ? 'cursor-pointer' : 'cursor-default'}`}
+                      >
+                        <span className={`pwn-next-step-num ${step.phase}`}>{idx + 1}</span>
+                        <div className="flex-1 text-left">
+                          <span className="text-xs text-gray-300">{step.step}</span>
+                        </div>
+                        {step.id && <ChevronRight size={12} className="text-gray-500 flex-shrink-0" />}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           );
 
@@ -146,6 +253,19 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
                   ))}
                 </ol>
               </div>
+              {kbEntry.preconditions.offsetDiscovery && Object.keys(kbEntry.preconditions.offsetDiscovery).length > 0 && (
+                <div className="pwn-card">
+                  <p className="pwn-card-title">Offset Discovery</p>
+                  <div className="space-y-2">
+                    {Object.entries(kbEntry.preconditions.offsetDiscovery).map(([tool, cmd]) => (
+                      <div key={tool} className="flex items-start gap-2">
+                        <span className="text-amber-400 text-xs font-mono">{tool}:</span>
+                        <code className="text-gray-300 bg-slate-800/50 px-1.5 py-0.5 rounded text-xs flex-1">{cmd}</code>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           );
 
@@ -155,9 +275,20 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
               {kbEntry.exploitationPaths.map((path, idx) => (
                 <div key={idx} className="pwn-card space-y-3">
                   <div>
-                    <p className="text-cyan-300 font-semibold text-sm">{path.name}</p>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`pwn-difficulty-badge ${idx === 0 ? 'intermediate' : idx === 1 ? 'advanced' : 'expert'}`}>
+                        Path {idx + 1}
+                      </span>
+                      <p className="text-cyan-300 font-semibold text-sm">{path.name}</p>
+                    </div>
                     <p className="text-gray-400 text-xs mt-1 leading-relaxed">{path.description}</p>
                   </div>
+                  {path.applicableLibc && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-gray-500 font-mono">libc:</span>
+                      <span className="px-1.5 py-0.5 bg-purple-900/20 text-purple-300 text-xs rounded-md border border-purple-500/20">{path.applicableLibc}</span>
+                    </div>
+                  )}
                   {path.steps && path.steps.length > 0 && (
                     <div>
                       <p className="text-xs text-amber-400 font-semibold mb-2 uppercase tracking-wider">Steps</p>
@@ -208,10 +339,28 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
 
         case 'checklist': {
           const activeSession = getActiveSession();
+          const completedCount = activeSession?.checklist.filter(c => c.completed).length || 0;
+          const totalCount = activeSession?.checklist.length || 0;
+          const progress = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
+
           return (
             <div className="pwn-section space-y-4">
+              {activeSession && totalCount > 0 && (
+                <div className="flex items-center gap-2 mb-1">
+                  <div className="flex-1 h-1.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
+                    <div 
+                      className="h-full bg-gradient-to-r from-emerald-500 to-cyan-500 transition-all duration-500"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                  <span className="text-xs font-mono text-cyan-400">{completedCount}/{totalCount}</span>
+                </div>
+              )}
               <div className="pwn-card">
-                <p className="pwn-card-title">Operator Workflow</p>
+                <div className="flex items-center gap-1.5 mb-2">
+                  <ListChecks size={12} className="text-cyan-400" />
+                  <p className="pwn-card-title mb-0">Operator Workflow</p>
+                </div>
                 {activeSession && (
                   <InteractiveChecklist
                     items={activeSession.checklist}
@@ -388,12 +537,36 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
           return null;
       }
     } else {
-      // Legacy mode for nodes without KB
       switch (activeTab) {
         case 'overview':
           return (
-            <div className="pwn-section">
+            <div className="pwn-section space-y-4">
               <p className="pwn-section-content">{selectedNode.description}</p>
+
+              {/* Next Steps for non-KB nodes */}
+              {nextSteps.length > 0 && (
+                <div className="pwn-card">
+                  <div className="flex items-center gap-1.5 mb-2.5">
+                    <ChevronRight size={12} className="text-cyan-400" />
+                    <p className="pwn-card-title mb-0">Next Steps</p>
+                  </div>
+                  <div className="pwn-next-steps">
+                    {nextSteps.map((step, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => handleNextStepClick(step.id)}
+                        className={`pwn-next-step-item ${step.id ? 'cursor-pointer' : 'cursor-default'}`}
+                      >
+                        <span className={`pwn-next-step-num ${step.phase}`}>{idx + 1}</span>
+                        <div className="flex-1 text-left">
+                          <span className="text-xs text-gray-300">{step.step}</span>
+                        </div>
+                        {step.id && <ChevronRight size={12} className="text-gray-500 flex-shrink-0" />}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           );
 
@@ -521,8 +694,25 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
   return (
     <div className="pwn-inspector">
       <div className="pwn-inspector-header">
-        <div className="pwn-inspector-title">{selectedNode.name}</div>
-        <div className="mt-2">{getCategoryBadge()}</div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="pwn-inspector-title">{selectedNode.name}</div>
+          {difficultyBadge && (
+            <span className={`pwn-difficulty-badge ${difficultyBadge.cls}`}>
+              {difficultyBadge.label}
+            </span>
+          )}
+        </div>
+        <div className="mt-2 flex items-center gap-2 flex-wrap">
+          {getCategoryBadge()}
+          {phaseTag && (
+            <span className={`pwn-phase-tag ${phaseTag.cls}`}>
+              {phaseTag.label}
+            </span>
+          )}
+        </div>
+        {tooltip && (
+          <p className="text-xs text-gray-500 mt-1.5 leading-relaxed">{tooltip.description}</p>
+        )}
       </div>
 
       <div className="pwn-inspector-tabs">

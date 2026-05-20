@@ -135,6 +135,35 @@ export const KB_MAPPING: Record<string, TechniqueDetails | undefined> = {
   'mmap_overlapping_chunks': PWN_KNOWLEDGE_BASE['mmap_overlapping_chunks'],
   'sysmalloc_int_free': PWN_KNOWLEDGE_BASE['sysmalloc_int_free'],
   'safe_link_double_protect': PWN_KNOWLEDGE_BASE['safe_link_double_protect'],
+
+  // how2heap additions - round 2
+  'first_fit': PWN_KNOWLEDGE_BASE['first_fit'],
+  'poison_null_byte': PWN_KNOWLEDGE_BASE['poison_null_byte'],
+  'house_of_husk': PWN_KNOWLEDGE_BASE['house_of_husk'],
+  'house_of_corrosion': PWN_KNOWLEDGE_BASE['house_of_corrosion'],
+  'house_of_cat': PWN_KNOWLEDGE_BASE['house_of_cat'],
+
+  // heap technique aliases
+  'fastbin_dup_into_stack': PWN_KNOWLEDGE_BASE['fastbin_reverse_into_tcache'],
+  'poison_null': PWN_KNOWLEDGE_BASE['poison_null_byte'],
+  'off_by_one_null': PWN_KNOWLEDGE_BASE['poison_null_byte'],
+  'top_chunk_shrink': PWN_KNOWLEDGE_BASE['house_of_corrosion'],
+  'first_fit_demo': PWN_KNOWLEDGE_BASE['first_fit'],
+  'printf_func_hijack': PWN_KNOWLEDGE_BASE['house_of_husk'],
+  'wide_data_vtable': PWN_KNOWLEDGE_BASE['house_of_cat'],
+
+  // setup tools
+  'setup_gdb': PWN_KNOWLEDGE_BASE['setup_gdb'],
+  'setup_pwntools': PWN_KNOWLEDGE_BASE['setup_pwntools'],
+  'setup_ghidra': PWN_KNOWLEDGE_BASE['setup_ghidra'],
+  'setup_ida': PWN_KNOWLEDGE_BASE['setup_ida'],
+  'setup_checksec': PWN_KNOWLEDGE_BASE['setup_checksec'],
+  'setup_ropper': PWN_KNOWLEDGE_BASE['setup_ropper'],
+  'setup_libc_db': PWN_KNOWLEDGE_BASE['setup_libc_db'],
+  'setup_seccomp_tools': PWN_KNOWLEDGE_BASE['setup_seccomp_tools'],
+  'setup_patchelf': PWN_KNOWLEDGE_BASE['setup_patchelf'],
+  'setup_qemu': PWN_KNOWLEDGE_BASE['setup_qemu'],
+  'setup_tools_root': PWN_KNOWLEDGE_BASE['setup_gdb'],
 };
 
 export function getTechniqueKB(techniqueId: string): TechniqueDetails | undefined {

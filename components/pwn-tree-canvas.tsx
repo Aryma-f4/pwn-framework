@@ -99,9 +99,10 @@ export function PwnTreeCanvas({
     // Build hierarchy from root
     const hierarchyData = buildHierarchy('root', filteredTechniques, collapsedNodes);
 
-    // Create tree layout with fixed node sizes to prevent squishing
-    const dx = 60; // Vertical spacing
-    const dy = 240; // Horizontal spacing
+    // Create tree layout with dynamic node sizes for responsiveness
+    const isMobile = window.innerWidth < 768;
+    const dx = isMobile ? 40 : 60; // Vertical spacing
+    const dy = isMobile ? 160 : 240; // Horizontal spacing
     const tree = d3.tree<Technique>().nodeSize([dx, dy]);
     const root = d3.hierarchy(hierarchyData);
     tree(root);

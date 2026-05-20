@@ -1,6 +1,6 @@
 import { Technique, PWN_TECHNIQUES } from './pwn-data';
 
-export type FilterType = 'stack' | 'format' | 'heap' | 'sandbox' | 'root';
+export type FilterType = 'stack' | 'format' | 'heap' | 'sandbox' | 'root' | 'setup';
 
 export interface FilterPreset {
   name: string;
@@ -40,6 +40,12 @@ export const FILTER_PRESETS: FilterPreset[] = [
     description: 'Main starting points and branches',
     color: 'from-gray-500 to-gray-600',
   },
+  {
+    name: 'Tool Setup',
+    type: 'setup',
+    description: 'Environment setup guides',
+    color: 'from-sky-500 to-sky-600',
+  },
 ];
 
 export const filterByVulnerability = (
@@ -66,6 +72,9 @@ export const filterByVulnerability = (
         break;
       case 'root':
         if (technique.category === 'root') filtered[key] = technique;
+        break;
+      case 'setup':
+        if (technique.category === 'setup' || technique.id === 'setup_tools_root') filtered[key] = technique;
         break;
     }
   });

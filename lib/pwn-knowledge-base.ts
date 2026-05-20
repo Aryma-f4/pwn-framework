@@ -11,7 +11,7 @@ export interface ExploitationPath {
 export interface TechniqueDetails {
   id: string;
   name: string;
-  category: 'recon' | 'mitigation' | 'technique' | 'leaf';
+  category: 'recon' | 'mitigation' | 'technique' | 'leaf' | 'setup';
   class: string;
   description: string;
   
@@ -3201,6 +3201,1267 @@ malloc(0x10000)  # large malloc
     references: [
       { description: 'How2Heap: safe_link_double_protect', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/safe_link_double_protect.c' },
       { description: '37C3 Potluck: Tamagoyaki', url: 'https://github.com/UDPctf/CTF-challenges/tree/main/Potluck-CTF-2023/Tamagoyaki' }
+    ]
+  },
+
+  first_fit: {
+    id: 'first_fit',
+    name: 'First Fit (Malloc Reuse)',
+    category: 'technique',
+    class: 'heap-foundational',
+    description: 'Demonstrates glibc malloc\'s first-fit / LIFO behavior for reused chunks. When a chunk is freed and a same-size allocation follows, malloc returns the most recently freed chunk. This is the foundational principle behind UAF, double-free, and tcache poisoning attacks.',
+
+    preconditions: {
+      summary: 'Understanding of how malloc selects chunks from free lists (fastbin, tcache, unsorted bin) for reuse. No vulnerability needed — purely informational.',
+      required: [
+        'Ability to allocate and free heap chunks of the same size class',
+        'Observation of LIFO (Last-In, First-Out) reuse order in fastbins and tcache',
+        'Understanding that malloc does not zero-fill freed chunks by default'
+      ],
+      detectionSteps: [
+        'Allocate two chunks of same size, free the first, then allocate same size again',
+        'Observe that the new allocation reuses the same memory address',
+        'In GDB: use pwndbg heap chunks to verify addresses match',
+        'Check that stale data persists in reused memory (no zeroing by malloc)'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'UAF Reclaim via First Fit',
+        description: 'Use first-fit behavior to type-confuse a freed chunk with a new allocation of the same size.',
+        steps: [
+          'Allocate object A (size 0x60)',
+          'Allocate object B (size 0x60)',
+          'Free object A',
+          'Allocate object C (size 0x60) — C == A due to first fit',
+          'Write controlled data into C',
+          'Dangling pointer to A now sees C\'s data (type confusion)'
+        ],
+        tools: ['pwndbg heap bins', 'pwntools'],
+        codeSnippet: `# First-fit demonstration
+a = malloc(0x60)   # 0x555000
+b = malloc(0x60)   # 0x555070
+free(a)            # a -> fastbin/tcache
+c = malloc(0x60)   # c == 0x555000 (first-fit reuse)
+assert c == a      # Types differ, memory overlaps!`,
+        applicableLibc: 'All versions',
+        references: [
+          { description: 'How2Heap: first_fit.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.35/first_fit.c' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['Same-size allocation reuses freed chunk address', 'Stale data visible in newly allocated memory'],
+      artifacts: ['GDB: same address returned by malloc after free+malloc']
+    },
+
+    operatorChecklist: [
+      '[ ] Allocate and free chunk of target size',
+      '[ ] Allocate same size — verify address reuse',
+      '[ ] Confirm stale data persists (no zeroing)',
+      '[ ] Plan UAF/double-free chain based on first-fit reuse'
+    ],
+
+    vulnerabilityTypes: ['heap', 'foundational', 'uaf'],
+    references: [
+      { description: 'How2Heap: first_fit.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.35/first_fit.c' },
+      { description: 'Glibc Malloc Internals', url: 'https://sourceware.org/glibc/wiki/MallocInternals' }
+    ]
+  },
+
+  poison_null_byte: {
+    id: 'poison_null_byte',
+    name: 'Poison Null Byte (Off-by-One Null)',
+    category: 'technique',
+    class: 'heap-null-byte',
+    description: 'Exploits a single null byte overflow (off-by-one) by clearing the PREV_IN_USE bit and setting a fake prev_size, causing backward coalescing and overlapping chunks. A foundational technique for modern heap exploitation.',
+
+    preconditions: {
+      summary: 'A single null byte overflow from one heap chunk into the size field of the next chunk. This clears the PREV_IN_USE flag and can manipulate prev_size to trick the allocator into consolidating backwards.',
+      required: [
+        'Off-by-one null byte vulnerability in a heap write operation',
+        'Ability to control chunk layout (allocate/free in specific order)',
+        'Understanding of PREV_IN_USE bit and backward coalescing mechanics'
+      ],
+      detectionSteps: [
+        'Look for off-by-one writes: strlen vs buffer size mismatches, strncpy NUL termination',
+        'In GDB: examine chunk headers before and after the vulnerable write',
+        'Check if PREV_IN_USE bit (size & 0x1) is cleared after the null byte write',
+        'Verify that prev_size field changes to the attacker-controlled value'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'Overlapping Chunks via Null Byte',
+        description: 'Use off-by-one null to create overlapping chunks by triggering backward coalescing to a fake chunk.',
+        steps: [
+          'Allocate A (victim), B (overflow source), C (guard) with A adjacent to B adjacent to C',
+          'Create a fake chunk F inside A\'s data area with proper size and prev_size',
+          'Trigger the off-by-one null from B into C: clears C.PREV_IN_USE and sets C.prev_size = B_start - F_start',
+          'Free C — allocator sees C.PREV_IN_USE=0, consolidates backwards to F, creating overlap with A',
+          'Now: A (still allocated) overlaps with the consolidated free chunk',
+          'Allocate from the consolidated chunk to get a pointer overlapping with A — full UAF/type confusion'
+        ],
+        tools: ['pwndbg heap chunks', 'pwndbg bins', 'pwntools'],
+        codeSnippet: `# Poison Null Byte — chunk layout setup
+a = malloc(0x100)  # victim chunk
+b = malloc(0x200)  # overflow source
+c = malloc(0x100)  # guard chunk
+
+# Forge fake chunk inside A
+# fake size at a+0x10, fake prev_size at a
+# ...
+
+# Off-by-one null byte from B into C header
+*(uint8_t*)(b + 0x200) = '\\x00'  # Clears C->PREV_IN_USE
+
+# C now thinks B extends back to fake chunk in A
+# Free C → backward coalesce to fake chunk
+free(c)
+# Overlap: freed region covers A's memory!`,
+        applicableLibc: '2.14-2.29 (easier), 2.29+ (harder, requires more checks)',
+        references: [
+          { description: 'How2Heap: poison_null_byte.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.35/poison_null_byte.c' },
+          { description: 'Plaid CTF 2015: pwnable200', url: 'https://ctftime.org' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['Overlapping chunks created', 'PREV_IN_USE bit cleared successfully', 'Backward coalescing triggered to fake chunk'],
+      artifacts: ['GDB: freed chunk covers victim chunk memory', 'Pwndbg: unsorted bin contains overlapping chunk']
+    },
+
+    operatorChecklist: [
+      '[ ] Identify off-by-one null byte write in the binary',
+      '[ ] Set up chunk layout: fake_chunk → victim → overflow_source → guard',
+      '[ ] Forge fake chunk with proper size and prev_size fields',
+      '[ ] Trigger null byte overflow to clear PREV_IN_USE of guard chunk',
+      '[ ] Free guard chunk — verify backward coalescing to fake chunk',
+      '[ ] Allocate from overlapping region to get controlled memory',
+      '[ ] Chain with tcache poisoning or GOT overwrite'
+    ],
+
+    vulnerabilityTypes: ['heap', 'off-by-one', 'null-byte'],
+    references: [
+      { description: 'How2Heap: poison_null_byte.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.35/poison_null_byte.c' },
+      { description: 'Glibc Malloc: off-by-one null exploitation', url: 'https://heap-exploitation.dhavalkapil.com/diving_into_glibc_heap/heap_corruption.html' }
+    ]
+  },
+
+  house_of_husk: {
+    id: 'house_of_husk',
+    name: 'House of Husk (Printf Function Table Hijack)',
+    category: 'technique',
+    class: 'heap-fsop',
+    description: 'Corrupts libc\'s __printf_function_table or __printf_arginfo_table to redirect execution through crafted printf format specifier. Works on glibc 2.23-2.31 by leveraging heap overflow or UAF to overwrite these internal libc tables.',
+
+    preconditions: {
+      summary: 'A heap overflow or UAF that allows writing to libc\'s printf function pointer tables. Requires a libc address leak.',
+      required: [
+        'Libc address leak (essential for calculating table offsets)',
+        'Heap overflow or UAF to write to __printf_function_table or __printf_arginfo_table',
+        'Binary must call printf() or related functions with user-controlled format specifiers'
+      ],
+      detectionSteps: [
+        'Leak libc address via unsorted bin or format string',
+        'In GDB: locate __printf_function_table and __printf_arginfo_table in libc',
+        'Verify that printf with format specifiers triggers table lookups',
+        'Check libc version — __printf_function_table must be writable'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'Printf Function Table Hijack to RCE',
+        description: 'Overwrite __printf_function_table to point to a crafted arginfo table, then trigger printf to call one_gadget.',
+        steps: [
+          'Leak libc base address via unsorted bin leak or format string',
+          'Calculate offsets for __printf_function_table and __printf_arginfo_table',
+          'Use heap overflow or UAF to write a pointer chain:',
+          '  __printf_function_table → heap addr of arginfo_table',
+          '  arginfo_table[char_offset] → one_gadget or system address',
+          'Call printf() with the format specifier that hits the corrupted entry',
+          'Execution redirects to one_gadget — shell obtained'
+        ],
+        tools: ['pwndbg', 'pwntools', 'one_gadget'],
+        codeSnippet: `# House of Husk
+libc_base = leak_libc()
+printf_func_table = libc_base + OFFSET_PRINTF_FUNCTION_TABLE
+printf_arginfo_table = libc_base + OFFSET_PRINTF_ARGINFO_TABLE
+
+# Corrupt __printf_function_table
+# Point it to our controlled arginfo table on the heap
+*(uint64_t*)printf_func_table = heap_addr
+
+# In heap, set arginfo entry for specific char to one_gadget
+*(uint64_t*)(heap_addr + CHAR_OFFSET * 8) = one_gadget
+
+# Now any printf with that format char triggers one_gadget
+printf("%<char>")  # → one_gadget()`,
+        applicableLibc: '2.23-2.31',
+        references: [
+          { description: 'How2Heap: house_of_husk.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.27/house_of_husk.c' },
+          { description: 'Balsn CTF 2020: Plain Text writeup', url: 'https://ctftime.org' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['__printf_function_table points to attacker-controlled memory', 'Printf with target specifier executes one_gadget'],
+      artifacts: ['GDB: __printf_function_table overwritten', 'Shell obtained via printf call']
+    },
+
+    operatorChecklist: [
+      '[ ] Leak libc base address',
+      '[ ] Locate __printf_function_table and __printf_arginfo_table in libc',
+      '[ ] Corrupt __printf_function_table to point to controlled arginfo table',
+      '[ ] Set arginfo entry for target format char to one_gadget',
+      '[ ] Call printf with target format specifier',
+      '[ ] Verify: shell spawned or code execution achieved'
+    ],
+
+    vulnerabilityTypes: ['heap', 'fsop', 'libc-internal'],
+    references: [
+      { description: 'How2Heap: house_of_husk.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.27/house_of_husk.c' }
+    ]
+  },
+
+  house_of_corrosion: {
+    id: 'house_of_corrosion',
+    name: 'House of Corrosion (Top Chunk Shrink to Arbitrary Write)',
+    category: 'technique',
+    class: 'heap-top-chunk',
+    description: 'Exploits a heap overflow to shrink the top chunk size, then uses targeted allocations to reach and overwrite global variables like __free_hook. A powerful technique for achieving arbitrary write without needing a direct heap overflow into the target.',
+
+    preconditions: {
+      summary: 'A heap overflow that can modify the top chunk size field. Used to shrink the top chunk so that subsequent allocations can reach arbitrary writable addresses in libc or BSS.',
+      required: [
+        'Heap overflow that reaches the top chunk header',
+        'Ability to allocate many chunks (to exhaust shrunk top and reach target)',
+        'Knowledge of the approximate distance between heap and target (e.g., __free_hook)'
+      ],
+      detectionSteps: [
+        'In GDB: identify top chunk location after overflow',
+        'Calculate: target_addr - current_top = required allocation distance',
+        'Verify target is writable (e.g., __free_hook in .bss)',
+        'Check that overflow can modify top chunk size without crashing'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: '__free_hook Overwrite via Top Chunk Manipulation',
+        description: 'Shrink top chunk, then allocate to reach __free_hook and overwrite it.',
+        steps: [
+          'Overflow into top chunk, set size = 0x1 (or very small value)',
+          'Calculate distance from current top to __free_hook',
+          'Allocate a chunk of size (distance - header_size) to position top near __free_hook',
+          'Allocate another chunk — this allocation lands at __free_hook',
+          'Write one_gadget or system address into this chunk',
+          'Free a chunk containing "/bin/sh" — triggers __free_hook → shell'
+        ],
+        tools: ['pwndbg vmmap', 'pwntools', 'one_gadget'],
+        codeSnippet: `# House of Corrosion
+# 1. Shrink top chunk
+*(uint64_t*)(top_chunk + 8) = 1;  # top->size = 1
+
+# 2. Calculate distance to __free_hook
+target = libc_base + FREE_HOOK_OFFSET
+distance = target - (top_chunk + 0x10)  # account for chunk header
+
+# 3. Allocate to move top chunk near __free_hook
+malloc(distance)  # exhausts tiny top, sysmalloc extends
+
+# 4. Next allocation lands at/near __free_hook
+hook_chunk = malloc(0x10)
+*(uint64_t*)hook_chunk = one_gadget  # overwrite __free_hook
+
+# 5. Trigger
+free("/bin/sh")  # __free_hook → one_gadget`,
+        applicableLibc: '2.23-2.29 (works best)',
+        references: [
+          { description: 'How2Heap: house_of_corrosion.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.27/house_of_corrosion.c' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['__free_hook or target global overwritten with one_gadget', 'Shell spawned via free("/bin/sh")'],
+      artifacts: ['GDB: __free_hook points to one_gadget', 'Shell session obtained']
+    },
+
+    operatorChecklist: [
+      '[ ] Identify heap overflow that reaches top chunk',
+      '[ ] Calculate top_chunk address and overflow offset',
+      '[ ] Overwrite top chunk size with small value (e.g., 1)',
+      '[ ] Calculate distance from top to __free_hook',
+      '[ ] Allocate distance-sized chunk to position top near target',
+      '[ ] Allocate small chunk at target address',
+      '[ ] Write one_gadget/system to target',
+      '[ ] Trigger free("/bin/sh")'
+    ],
+
+    vulnerabilityTypes: ['heap', 'top-chunk', 'arbitrary-write'],
+    references: [
+      { description: 'How2Heap: house_of_corrosion.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.27/house_of_corrosion.c' }
+    ]
+  },
+
+  house_of_cat: {
+    id: 'house_of_cat',
+    name: 'House of Cat (Wide Data Vtable Hijack)',
+    category: 'technique',
+    class: 'heap-fsop',
+    description: 'Modern FSOP technique for glibc 2.35+ that leverages _IO_wide_data vtable redirection to bypass the vtable verification check. By corrupting the _wide_data pointer in a _IO_FILE structure, execution can be redirected through _IO_wfile_jumps.',
+
+    preconditions: {
+      summary: 'Controlled write to a _IO_FILE structure\'s _wide_data pointer. Requires libc leak. The key insight is that vtable checks only verify the vtable is within the _IO_wfile_jumps section, so wide data vtable pointers bypass this verification.',
+      required: [
+        'UAF or heap overflow to corrupt _IO_FILE._wide_data pointer',
+        'Libc address leak (mandatory for _IO_wfile_jumps address)',
+        'Ability to trigger IO flush (exit, assert, or puts on corrupted stream)',
+        'Controlled memory area to place fake _IO_wide_data struct'
+      ],
+      detectionSteps: [
+        'Leak libc base address',
+        'In GDB: find _IO_wfile_jumps vtable address in libc',
+        'Identify writable _IO_FILE structure on heap or in BSS',
+        'Verify exit()/assert() path triggers IO flush on target stream'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'Wide Data Vtable Hijack for RCE',
+        description: 'Corrupt _IO_FILE._wide_data to point to controlled vtable within _IO_wfile_jumps range, redirecting _IO_wfile_overflow to one_gadget.',
+        steps: [
+          'Leak libc base address',
+          'Obtain a controlled write to a _IO_FILE structure (e.g., via large bin attack)',
+          'Set _flags to trigger wide data path: 0x800 | 0x2',
+          'Set _wide_data pointer to attacker-controlled memory',
+          'In controlled memory, craft _IO_wide_data with _wide_vtable pointing to _IO_wfile_jumps + offset',
+          'The offset should land on a function pointer that gets called during _IO_wfile_overflow',
+          'Write one_gadget address at that offset in libc (or in the vtable)',
+          'Call exit() or trigger IO flush — _IO_wfile_overflow dispatches through corrupted wide vtable',
+          'Execution reaches one_gadget — shell obtained'
+        ],
+        tools: ['pwndbg', 'pwntools', 'one_gadget'],
+        codeSnippet: `# House of Cat
+libc_base = leak_libc()
+wfile_jumps = libc_base + IO_WFILE_JUMPS_OFFSET
+one_gadget = libc_base + ONE_GADGET_OFFSET
+
+# Forge _IO_FILE on heap (via large bin attack or UAF)
+fake_file = controlled_mem
+fake_file._flags = 0x800 | 0x2  # _IO_CURRENTLY_PUTTING | _IO_NO_WRITES
+fake_file._wide_data = controlled_mem + 0x100
+
+# Craft wide_data vtable
+wide_data = controlled_mem + 0x100
+wide_data._wide_vtable = controlled_mem + 0x200
+
+# Fake vtable entries pointing to one_gadget
+fake_vtable = controlled_mem + 0x200
+fake_vtable.__overflow = one_gadget
+
+# Link into stdout or trigger via exit
+exit(0)  # → _IO_wfile_overflow → one_gadget`,
+        applicableLibc: '2.35+',
+        references: [
+          { description: 'How2Heap: house_of_cat.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.35/house_of_cat.c' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['_IO_wfile_overflow called with attacker-controlled wide vtable', 'Shell obtained via one_gadget through wide data dispatch'],
+      artifacts: ['GDB: _wide_data vtable points to controlled memory', 'one_gadget executed']
+    },
+
+    operatorChecklist: [
+      '[ ] Leak libc base address',
+      '[ ] Find _IO_wfile_jumps offset in libc',
+      '[ ] Obtain controlled write to _IO_FILE structure',
+      '[ ] Set _flags = 0x800 | 0x2 for wide data path',
+      '[ ] Set _wide_data to point to controlled fake struct',
+      '[ ] Set _wide_vtable within _IO_wfile_jumps range',
+      '[ ] Place one_gadget at overflow offset in fake vtable',
+      '[ ] Trigger IO flush via exit() or assert()',
+      '[ ] Verify: shell spawned'
+    ],
+
+    vulnerabilityTypes: ['heap', 'fsop', 'modern-glibc'],
+    references: [
+      { description: 'How2Heap: house_of_cat.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.35/house_of_cat.c' }
+    ]
+  },
+
+  // ============== ENVIRONMENT SETUP ==============
+
+  setup_gdb: {
+    id: 'setup_gdb',
+    name: 'GDB + pwndbg Setup',
+    category: 'setup',
+    class: 'tool-setup',
+    description: 'Install and configure GDB with pwndbg for binary exploitation debugging. pwndbg adds heap inspection, register context, and exploit development helpers that make GDB usable for pwn.',
+
+    preconditions: {
+      summary: 'A Linux environment (Ubuntu 20.04/22.04 or WSL2) with development tools installed. GDB and pwndbg are the single most important tools for exploit development.',
+      required: [
+        'Ubuntu/Debian-based Linux or WSL2',
+        'Python 3.8+ with pip',
+        'Git for cloning pwndbg',
+        'Internet connection for downloading dependencies'
+      ],
+      detectionSteps: [
+        'Run: gdb --version (should show GDB 10+)',
+        'Run: python3 --version (should show Python 3.8+)',
+        'After pwndbg install: gdb -ex "pwndbg" ./binary',
+        'Verify pwndbg context display appears in GDB'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'Full Setup: GDB + pwndbg',
+        description: 'Install GDB with pwndbg enhancement and verify it works with a test binary.',
+        steps: [
+          'sudo apt update && sudo apt install -y gdb gdb-multiarch python3-dev git',
+          'cd ~ && git clone https://github.com/pwndbg/pwndbg',
+          'cd pwndbg && ./setup.sh',
+          'Add to ~/.gdbinit: set disassembly-flavor intel (optional)',
+          'Test: gdb ./your_binary → should show pwndbg prompt with context',
+          'Essential pwndbg commands: checksec, vmmap, heap, telescope, search, got, context'
+        ],
+        tools: ['gdb', 'pwndbg', 'gdb-multiarch'],
+        codeSnippet: `# Install GDB + pwndbg
+sudo apt update && sudo apt install -y gdb gdb-multiarch python3-dev git
+cd ~
+git clone https://github.com/pwndbg/pwndbg
+cd pwndbg && ./setup.sh
+
+# Essential pwndbg commands during exploitation:
+# pwndbg> checksec          → show binary protections
+# pwndbg> vmmap             → show memory regions and permissions
+# pwndbg> heap chunks       → show heap chunk layout
+# pwndbg> heap bins          → show tcache/fastbin/unsorted bins
+# pwndbg> telescope $rsp 20  → dump 20 qwords from stack
+# pwndbg> got                → show GOT entries
+# pwndbg> search -t string "flag" → search memory for strings`,
+        applicableLibc: 'All versions',
+        references: [
+          { description: 'pwndbg GitHub', url: 'https://github.com/pwndbg/pwndbg' },
+          { description: 'pwndbg Commands Reference', url: 'https://pwndbg.re/en/latest/commands/' }
+        ]
+      },
+      {
+        name: 'GEF Alternative Setup',
+        description: 'Install GEF (GDB Enhanced Features) as an alternative to pwndbg.',
+        steps: [
+          'Run: bash -c "$(curl -fsSL https://gef.blahcat.sh)"',
+          'Or: wget -q -O ~/.gdbinit-gef.py https://github.com/hugsy/gef/raw/main/gef.py',
+          'Add to ~/.gdbinit: source ~/.gdbinit-gef.py',
+          'Test: gdb ./binary → should show GEF context'
+        ],
+        tools: ['gdb', 'GEF'],
+        codeSnippet: `# Install GEF
+bash -c "$(curl -fsSL https://gef.blahcat.sh)"
+
+# Key GEF commands:
+# gef> heap chunks          → show heap layout
+# gef> checksec             → show protections
+# gef> pattern create 200   → generate cyclic pattern
+# gef> pattern search $rsp  → find offset
+# gef> vmmap               → memory map`,
+        applicableLibc: 'All versions',
+        references: [
+          { description: 'GEF GitHub', url: 'https://github.com/hugsy/gef' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['GDB launches with pwndbg/GEF context display', 'checksec command works inside GDB', 'heap commands available'],
+      artifacts: ['~/.gdbinit configured', 'pwndbg installed in ~/pwndbg']
+    },
+
+    operatorChecklist: [
+      '[ ] apt install gdb gdb-multiarch python3-dev git',
+      '[ ] git clone pwndbg && cd pwndbg && ./setup.sh',
+      '[ ] Verify: gdb ./binary shows pwndbg context',
+      '[ ] Test: checksec, vmmap, heap commands work',
+      '[ ] Set disassembly-flavor intel in ~/.gdbinit'
+    ],
+
+    vulnerabilityTypes: ['tool-setup', 'debugging'],
+    references: [
+      { description: 'pwndbg GitHub', url: 'https://github.com/pwndbg/pwndbg' },
+      { description: 'GEF - GDB Enhanced Features', url: 'https://github.com/hugsy/gef' },
+      { description: 'PEDA - Python Exploit Dev Assistance', url: 'https://github.com/longld/peda' }
+    ]
+  },
+
+  setup_pwntools: {
+    id: 'setup_pwntools',
+    name: 'pwntools Setup',
+    category: 'setup',
+    class: 'tool-setup',
+    description: 'Install pwntools — the Python exploit development framework. Provides process/remote tube abstraction, ROP chain building, cyclic patterns, ELF parsing, and shellcraft.',
+
+    preconditions: {
+      summary: 'Python 3.8+ environment with pip. pwntools is the standard exploit development library used in virtually every CTF writeup.',
+      required: [
+        'Python 3.8+ with pip3',
+        'Linux system (WSL2 on Windows)',
+        'Internet connection for pip install'
+      ],
+      detectionSteps: [
+        'Run: python3 -c "from pwn import *; print(\'pwntools OK\')"',
+        'Run: pwn --version',
+        'Verify cyclic, ROPgadget, checksec commands are available',
+        'Test with a simple script: p = process("/bin/ls")'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'Full pwntools Installation',
+        description: 'Install pwntools with all dependencies and cross-architecture support.',
+        steps: [
+          'pip3 install pwntools',
+          'sudo apt install -y binutils-arm-linux-gnueabihf binutils-mips-linux-gnu binutils-aarch64-linux-gnu',
+          'Add to ~/.bashrc: export PWNTOOLS_SILENT=1 (optional, suppresses warnings)',
+          'Test: python3 -c "from pwn import *; print(context.arch)"',
+          'Optional: install pwntools docs locally with pip3 install pwntools-docs'
+        ],
+        tools: ['pwntools', 'pip3'],
+        codeSnippet: `# Install pwntools
+pip3 install pwntools
+
+# Cross-architecture binutils (for shellcraft/ASM)
+sudo apt install -y binutils-arm-linux-gnueabihf \\
+  binutils-mips-linux-gnu binutils-aarch64-linux-gnu
+
+# Essential pwntools patterns
+from pwn import *
+
+# Context setup
+context.update(arch='amd64', os='linux', log_level='debug')
+
+# Local process
+p = process('./binary')
+# Remote connection
+p = remote('host.ctf.com', 1337)
+
+# Cyclic pattern for offset discovery
+payload = cyclic(200)
+p.sendline(payload)
+# After crash: cyclic_find(core.read(core.rsp, 4))
+
+# ELF parsing
+e = ELF('./binary')
+print(f"PIE: {e.pie}, NX: {e.execstack}")
+print(f"system @ {hex(e.symbols['system'])}")
+
+# ROP chain building
+rop = ROP(e)
+rop.call('system', [next(e.search(b'/bin/sh'))])
+print(rop.dump())`,
+        applicableLibc: 'All versions',
+        references: [
+          { description: 'pwntools Docs', url: 'https://docs.pwntools.com/' },
+          { description: 'pwntools GitHub', url: 'https://github.com/Gallopsled/pwntools' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['python3 -c "from pwn import *" works', 'pwn checksec ./binary works', 'cyclic pattern generation works'],
+      artifacts: ['pwntools installed in pip3', 'pwn command available in PATH']
+    },
+
+    operatorChecklist: [
+      '[ ] pip3 install pwntools',
+      '[ ] Install cross-architecture binutils',
+      '[ ] Verify: python3 -c "from pwn import *; print(\'OK\')"',
+      '[ ] Test: pwn checksec /bin/ls',
+      '[ ] Test: cyclic(100) generates pattern',
+      '[ ] Add export PWNTOOLS_SILENT=1 to ~/.bashrc (optional)'
+    ],
+
+    vulnerabilityTypes: ['tool-setup', 'exploitation'],
+    references: [
+      { description: 'pwntools Documentation', url: 'https://docs.pwntools.com/' },
+      { description: 'pwntools GitHub', url: 'https://github.com/Gallopsled/pwntools' }
+    ]
+  },
+
+  setup_ghidra: {
+    id: 'setup_ghidra',
+    name: 'Ghidra Setup',
+    category: 'setup',
+    class: 'tool-setup',
+    description: 'Install Ghidra — the free NSA reverse engineering suite with decompiler, disassembler, and scriptable analysis. Essential for understanding binary logic.',
+
+    preconditions: {
+      summary: 'Java JDK 17+ and 4GB+ RAM for large binaries. Ghidra is the go-to free alternative to IDA Pro.',
+      required: [
+        'Java JDK 17+ (sudo apt install default-jdk)',
+        '4GB+ RAM (8GB+ recommended for large binaries)',
+        'X11 display (or X11 forwarding from remote)',
+        'Disk space: ~1GB for Ghidra itself'
+      ],
+      detectionSteps: [
+        'Run: java -version (should show 17+)',
+        'Run: ./ghidraRun (launches Ghidra GUI)',
+        'Create new project, import a binary, verify auto-analysis runs',
+        'Check that decompiler window opens and produces C-like output'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'Full Ghidra Installation',
+        description: 'Download and install Ghidra with Java JDK.',
+        steps: [
+          'sudo apt install default-jdk',
+          'Download latest Ghidra from https://ghidra-sre.org/',
+          'Unzip: unzip ghidra_*.zip',
+          'Run: ./ghidraRun',
+          'Create project → Import binary → Auto-Analyze (select all options)',
+          'After analysis: Window → Defined Strings, Function Call Graph'
+        ],
+        tools: ['ghidra', 'java'],
+        codeSnippet: `# Install Ghidra
+sudo apt install default-jdk
+cd ~
+wget https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra11.2.1_build/ghidra_11.2.1_PUBLIC.zip
+unzip ghidra_11.2.1_PUBLIC.zip
+cd ghidra_11.2.1_PUBLIC
+./ghidraRun
+
+# Headless analysis (for scripting):
+analyzeHeadless /tmp/project Binary \\
+  -import ./challenge -postScript Analyze.java
+
+# Key Ghidra shortcuts:
+# L → Rename variable/function
+# T → Retype variable
+# ; → Add comment
+# G → Go to address
+# Search → For Strings... → find /bin/sh, flag paths
+# Window → Function Call Graph → visualize calls`,
+        applicableLibc: 'N/A (static analysis tool)',
+        references: [
+          { description: 'Ghidra Downloads', url: 'https://ghidra-sre.org/' },
+          { description: 'Ghidra GitHub', url: 'https://github.com/NationalSecurityAgency/ghidra' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['Ghidra GUI launches', 'Binary imports and auto-analyzes', 'Decompiler produces C-like output'],
+      artifacts: ['~/ghidra_11.2.1_PUBLIC/ installed']
+    },
+
+    operatorChecklist: [
+      '[ ] Install Java JDK 17+',
+      '[ ] Download and unzip Ghidra',
+      '[ ] Launch ./ghidraRun',
+      '[ ] Import test binary and verify auto-analysis',
+      '[ ] Verify decompiler window works'
+    ],
+
+    vulnerabilityTypes: ['tool-setup', 'reverse-engineering'],
+    references: [
+      { description: 'Ghidra Official', url: 'https://ghidra-sre.org/' },
+      { description: 'Ghidra GitHub', url: 'https://github.com/NationalSecurityAgency/ghidra' }
+    ]
+  },
+
+  setup_ida: {
+    id: 'setup_ida',
+    name: 'IDA Pro Setup',
+    category: 'setup',
+    class: 'tool-setup',
+    description: 'Install IDA Pro — the industry-standard disassembler and decompiler (Hex-Rays). Best-in-class decompilation and plugin ecosystem. IDA Free available for x86.',
+
+    preconditions: {
+      summary: 'IDA Pro license (paid) for full features, or IDA Free for x86/x64 only. Required for serious binary analysis.',
+      required: [
+        'IDA Pro license (from hex-rays.com) or IDA Free',
+        'Windows, Linux, or macOS',
+        'Python 3 for IDAPython scripting'
+      ],
+      detectionSteps: [
+        'Run: ida64 ./binary (launches IDA with binary)',
+        'Press F5 to decompile (Hex-Rays)',
+        'Verify decompiler output appears',
+        'Install key plugins: LazyIDA, Keypatch, FindCrypt'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'IDA Pro Installation and Plugin Setup',
+        description: 'Install IDA Pro and essential plugins for exploit development.',
+        steps: [
+          'Download IDA from https://hex-rays.com/ida-pro/ (licensed) or IDA Free',
+          'Install and activate license',
+          'Install Hex-Rays decompiler for your architecture (x86/x64/ARM)',
+          'Install plugins: LazyIDA, Keypatch, FindCrypt, d810 (decompiler optimizations)',
+          'Configure IDAPython: Edit → Plugins → Python command',
+          'Key exploit workflow: Search → Strings → find /bin/sh, system, flag'
+        ],
+        tools: ['ida', 'hex-rays', 'idapython'],
+        codeSnippet: `# IDAPython Essential Scripts for PWN
+import idautils, idc, idaapi
+
+# Find all calls to dangerous functions
+dangerous = ['gets', 'strcpy', 'sprintf', 'read', 'scanf']
+for func_ea in idautils.Functions():
+    name = idc.get_func_name(func_ea)
+    if name in dangerous:
+        for xref in idautils.XrefsTo(func_ea):
+            print(f"  [!] {name} called at 0x{xref.frm:X}")
+
+# Find /bin/sh string
+for s in idautils.Strings():
+    if '/bin/sh' in str(s):
+        print(f"  /bin/sh @ 0x{s.ea:X}")
+
+# List all functions with addresses
+for func_ea in idautils.Functions():
+    print(f"  {idc.get_func_name(func_ea)} @ 0x{func_ea:X}")`,
+        applicableLibc: 'N/A (static analysis tool)',
+        references: [
+          { description: 'IDA Pro Homepage', url: 'https://hex-rays.com/ida-pro/' },
+          { description: 'IDA Free Download', url: 'https://hex-rays.com/ida-free/' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['IDA launches and loads binary', 'Hex-Rays decompiler produces output (licensed)', 'IDAPython scripts execute'],
+      artifacts: ['IDA Pro/Free installed', 'Plugins configured']
+    },
+
+    operatorChecklist: [
+      '[ ] Install IDA Pro or IDA Free',
+      '[ ] Install Hex-Rays decompiler (if licensed)',
+      '[ ] Install LazyIDA, Keypatch plugins',
+      '[ ] Load test binary and verify decompilation',
+      '[ ] Test IDAPython scripting'
+    ],
+
+    vulnerabilityTypes: ['tool-setup', 'reverse-engineering'],
+    references: [
+      { description: 'IDA Pro', url: 'https://hex-rays.com/ida-pro/' },
+      { description: 'IDA Free', url: 'https://hex-rays.com/ida-free/' }
+    ]
+  },
+
+  setup_checksec: {
+    id: 'setup_checksec',
+    name: 'checksec Setup',
+    category: 'setup',
+    class: 'tool-setup',
+    description: 'Install checksec — the binary protection analyzer. Always run FIRST on any target to determine NX, PIE, Canary, RELRO, and ASLR status.',
+
+    preconditions: {
+      summary: 'checksec is a standalone tool that reports binary security mitigations. It should be the very first tool you run on any target.',
+      required: [
+        'Linux system',
+        'readelf, objdump (part of binutils)',
+        'Python 3 (for pwntools checksec)'
+      ],
+      detectionSteps: [
+        'Run: checksec --file=/bin/ls',
+        'Or: pwn checksec /bin/ls',
+        'Verify output shows: NX, PIE, Canary, RELRO status'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'checksec Installation and Usage',
+        description: 'Install checksec and interpret the output to determine exploit strategy.',
+        steps: [
+          'sudo apt install checksec (standalone version)',
+          'OR: pip3 install pwntools (includes pwn checksec)',
+          'Run: checksec --file=./target_binary',
+          'Interpret each protection to plan bypass strategy'
+        ],
+        tools: ['checksec', 'pwn checksec'],
+        codeSnippet: `# Install
+sudo apt install checksec
+# OR use pwntools version (more detailed):
+pip3 install pwntools && pwn checksec ./binary
+
+# Output interpretation:
+# NX    = No-Execute: stack not executable → need ROP
+# PIE   = Position Independent: base addr random → need leak
+# Canary= Stack canary: overflow detection → need canary leak
+# RELRO = Relocation Read-Only:
+#   Partial → GOT writable → GOT overwrite possible
+#   Full   → GOT read-only → need hook/FSOP instead
+# ASLR  = Address Space Layout Randomization:
+#   On → need leak for addresses
+#   Off→ hardcoded addresses work
+
+# pwntools programmatic:
+from pwn import *
+e = ELF('./binary')
+print(f"NX: {not e.execstack}")
+print(f"PIE: {e.pie}")
+print(f"Canary: {e.canary}")
+print(f"RELRO: {e.relro}")`,
+        applicableLibc: 'All versions',
+        references: [
+          { description: 'checksec.sh GitHub', url: 'https://github.com/slimm609/checksec.sh' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['checksec --file output shows protection flags', 'pwn checksec works'],
+      artifacts: ['checksec installed']
+    },
+
+    operatorChecklist: [
+      '[ ] Install checksec (apt or pip3)',
+      '[ ] Run on target binary',
+      '[ ] Record NX, PIE, Canary, RELRO status',
+      '[ ] Plan exploit path based on protections'
+    ],
+
+    vulnerabilityTypes: ['tool-setup', 'recon'],
+    references: [
+      { description: 'checksec.sh', url: 'https://github.com/slimm609/checksec.sh' }
+    ]
+  },
+
+  setup_ropper: {
+    id: 'setup_ropper',
+    name: 'ROPgadget + ropper Setup',
+    category: 'setup',
+    class: 'tool-setup',
+    description: 'Install ROP gadget search tools and one_gadget for libc RCE. Essential for building ROP chains and finding one-shot gadgets.',
+
+    preconditions: {
+      summary: 'ROPgadget (comes with pwntools) and ropper are used to find ROP gadgets. one_gadget finds single-gadget RCE offsets in libc.',
+      required: [
+        'Python 3 with pip',
+        'capstone library (for ropper)',
+        'Ruby (for one_gadget)'
+      ],
+      detectionSteps: [
+        'Run: ROPgadget --binary /bin/ls | head -5',
+        'Run: ropper --file /bin/ls --search "pop rdi"',
+        'Run: one_gadget /lib/x86_64-linux-gnu/libc.so.6'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'ROP Tool Installation',
+        description: 'Install all ROP chain building tools.',
+        steps: [
+          'pip3 install ropper capstone',
+          'sudo apt install ruby && gem install one_gadget',
+          'ROPgadget comes with pwntools (already installed)',
+          'Verify: ROPgadget --binary ./binary --ropchain'
+        ],
+        tools: ['ROPgadget', 'ropper', 'one_gadget'],
+        codeSnippet: `# Install ROP tools
+pip3 install ropper capstone
+sudo apt install ruby && gem install one_gadget
+
+# ROPgadget - find gadgets
+ROPgadget --binary ./binary --only "pop|ret"
+ROPgadget --binary ./binary --ropchain    # auto chain
+
+# ropper - cleaner output
+ropper --file ./binary --search "pop rdi; ret"
+ropper --file ./binary --chain "execve"   # auto chain
+
+# one_gadget - find RCE in libc
+one_gadget /lib/x86_64-linux-gnu/libc.so.6
+# Output: constraints + addresses for one-shot execve
+
+# pwntools ROP (recommended for complex chains)
+from pwn import *
+rop = ROP(ELF('./binary'))
+rop.call('puts', [e.got['puts']])
+rop.call('main')
+rop.call('system', [next(e.search(b'/bin/sh'))])
+print(rop.dump())`,
+        applicableLibc: 'All versions',
+        references: [
+          { description: 'ROPgadget GitHub', url: 'https://github.com/JonathanSalwan/ROPgadget' },
+          { description: 'one_gadget GitHub', url: 'https://github.com/david942j/one_gadget' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['ROPgadget finds gadgets in test binary', 'ropper search returns results', 'one_gadget finds gadgets in libc'],
+      artifacts: ['ropper installed', 'one_gadget installed']
+    },
+
+    operatorChecklist: [
+      '[ ] pip3 install ropper capstone',
+      '[ ] gem install one_gadget',
+      '[ ] Verify: ROPgadget --binary /bin/ls',
+      '[ ] Verify: one_gadget /lib/x86_64-linux-gnu/libc.so.6'
+    ],
+
+    vulnerabilityTypes: ['tool-setup', 'rop'],
+    references: [
+      { description: 'ROPgadget', url: 'https://github.com/JonathanSalwan/ROPgadget' },
+      { description: 'one_gadget', url: 'https://github.com/david942j/one_gadget' }
+    ]
+  },
+
+  setup_libc_db: {
+    id: 'setup_libc_db',
+    name: 'libc-database Setup',
+    category: 'setup',
+    class: 'tool-setup',
+    description: 'Install libc-database for offline libc fingerprinting. Identify exact libc versions from leaked function offsets — critical for remote exploitation.',
+
+    preconditions: {
+      summary: 'The libc-database lets you identify the exact libc version running on a target from as few as 2 leaked function addresses. Essential for remote pwn.',
+      required: [
+        'Git for cloning',
+        '~2GB disk space for full database',
+        'Internet for initial download',
+        'At least 2 leaked libc function offsets'
+      ],
+      detectionSteps: [
+        'cd ~ && git clone https://github.com/niklasb/libc-database',
+        'cd libc-database && ./get ubuntu',
+        'Test: ./identify printf <offset>',
+        'Alternative: https://libc.rip (online)'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'libc-database Installation and Usage',
+        description: 'Set up libc database and learn to identify remote libc versions.',
+        steps: [
+          'git clone https://github.com/niklasb/libc-database',
+          'cd libc-database',
+          './get ubuntu (download Ubuntu libc versions)',
+          './identify <function> <offset> (identify from leak)',
+          './dump <libc_id> system "/bin/sh" (get offsets)',
+          'Alternative online: https://libc.rip'
+        ],
+        tools: ['libc-database', 'libc.rip'],
+        codeSnippet: `# Install libc-database
+cd ~
+git clone https://github.com/niklasb/libc-database
+cd libc-database
+
+# Download libc versions (takes time)
+./get ubuntu     # Ubuntu libc versions
+./get debian     # Debian libc versions
+
+# Identify libc from leaked offsets
+# If you leaked printf@0x7f1234567890 and puts@0x7f1234560000
+./identify printf 0x7f1234567890
+# OR provide multiple offsets for better accuracy
+
+# Get symbol offsets from identified libc
+./dump libc6_2.31-0ubuntu9_amd64 system "/bin/sh"
+# Output: system offset, /bin/sh offset, one_gadget offsets
+
+# Online alternative: https://libc.rip
+# Enter leaked offsets → get matching libc download link
+
+# pwntools integration
+from pwn import *
+libc = ELF('./identified_libc.so.6')
+system = libc.symbols['system']
+binsh = next(libc.search(b'/bin/sh'))
+one_gadgets = [0x4f2c5, 0x4f322, 0x10a38c]  # from one_gadget tool`,
+        applicableLibc: 'All versions',
+        references: [
+          { description: 'libc-database GitHub', url: 'https://github.com/niklasb/libc-database' },
+          { description: 'libc.rip Online', url: 'https://libc.rip' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['./identify returns libc version', './dump provides symbol offsets', 'libc.rip accessible'],
+      artifacts: ['~/libc-database/ populated']
+    },
+
+    operatorChecklist: [
+      '[ ] git clone libc-database',
+      '[ ] Run ./get ubuntu to download libc versions',
+      '[ ] Test: ./identify with known offset',
+      '[ ] Bookmark https://libc.rip as online alternative'
+    ],
+
+    vulnerabilityTypes: ['tool-setup', 'libc-identification'],
+    references: [
+      { description: 'libc-database', url: 'https://github.com/niklasb/libc-database' },
+      { description: 'libc.rip', url: 'https://libc.rip' }
+    ]
+  },
+
+  setup_seccomp_tools: {
+    id: 'setup_seccomp_tools',
+    name: 'seccomp-tools Setup',
+    category: 'setup',
+    class: 'tool-setup',
+    description: 'Install seccomp-tools to dump and analyze seccomp-BPF filter rules. Determines which syscalls are allowed, critical for choosing between execve vs ORW (open-read-write) chains.',
+
+    preconditions: {
+      summary: 'seccomp-tools reveals syscall filtering rules. If a binary has seccomp, you MUST check it before attempting execve shell.',
+      required: [
+        'Ruby (apt install ruby)',
+        'Target binary to analyze'
+      ],
+      detectionSteps: [
+        'gem install seccomp-tools',
+        'seccomp-tools dump ./binary',
+        'Interpret: if execve is KILL → use ORW chain'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'seccomp-tools Installation and Usage',
+        description: 'Install seccomp-tools and analyze syscall filters.',
+        steps: [
+          'sudo apt install ruby',
+          'gem install seccomp-tools',
+          'Run: seccomp-tools dump ./binary',
+          'Check: is execve allowed or blocked?',
+          'If blocked: plan open-read-write (ORW) chain instead'
+        ],
+        tools: ['seccomp-tools', 'ruby'],
+        codeSnippet: `# Install
+sudo apt install ruby
+gem install seccomp-tools
+
+# Dump seccomp rules
+seccomp-tools dump ./binary
+# Or with input:
+echo "AAAA" | seccomp-tools dump ./binary
+
+# Interpret output:
+# ALLOW open, read, write, exit → can read flag via ORW
+# KILL  execve              → MUST use ORW, no shell
+
+# Build ORW chain if execve is blocked
+from pwn import *
+rop = ROP(elf)
+rop.call('open', ['./flag', 0])     # fd = open("./flag", O_RDONLY)
+rop.call('read', [3, buf, 100])      # read(fd, buf, 100)
+rop.call('write', [1, buf, 100])     # write(stdout, buf, 100)
+
+# Alternative: openat syscall (if open is blocked)
+rop.call('openat', [0, './flag', 0])`,
+        applicableLibc: 'N/A (kernel feature)',
+        references: [
+          { description: 'seccomp-tools GitHub', url: 'https://github.com/david942j/seccomp-tools' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['seccomp-tools dump shows syscall rules', 'Can determine if execve is allowed/blocked'],
+      artifacts: ['seccomp-tools gem installed']
+    },
+
+    operatorChecklist: [
+      '[ ] gem install seccomp-tools',
+      '[ ] Run seccomp-tools dump on target',
+      '[ ] Check if execve is allowed',
+      '[ ] If blocked: plan ORW (open-read-write) chain'
+    ],
+
+    vulnerabilityTypes: ['tool-setup', 'sandbox-analysis'],
+    references: [
+      { description: 'seccomp-tools', url: 'https://github.com/david942j/seccomp-tools' }
+    ]
+  },
+
+  setup_patchelf: {
+    id: 'setup_patchelf',
+    name: 'patchelf + pwninit Setup',
+    category: 'setup',
+    class: 'tool-setup',
+    description: 'Install patchelf and pwninit to set up the correct libc environment locally. Essential for testing exploits against the same libc as the remote target.',
+
+    preconditions: {
+      summary: 'CTF challenges often use a different libc than your local system. patchelf and pwninit let you run the binary with the target libc.',
+      required: [
+        'Target libc.so.6 and ld-linux-x86-64.so.2 from remote',
+        'patchelf (apt install patchelf)',
+        'pwninit (pip install pwninit)'
+      ],
+      detectionSteps: [
+        'Download libc.so.6 and ld-linux from CTF challenge',
+        'Run: pwninit --binary ./challenge',
+        'Verify: ldd ./challenge_patched shows correct libc'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'patchelf + pwninit Setup',
+        description: 'Configure binary to use target libc for local testing.',
+        steps: [
+          'sudo apt install patchelf',
+          'pip3 install pwninit',
+          'Place binary, libc.so.6, ld-linux in same directory',
+          'Run: pwninit (auto-detects and patches)',
+          'Verify: ./challenge_patched runs with correct libc',
+          'Or manual: patchelf --set-interpreter ./ld-linux ./binary'
+        ],
+        tools: ['patchelf', 'pwninit', 'ldd'],
+        codeSnippet: `# Install
+sudo apt install patchelf
+pip3 install pwninit
+
+# Method 1: pwninit (recommended, auto-patches)
+# Place in same directory:
+#   challenge      (binary)
+#   libc.so.6      (target libc)
+#   ld-linux-x86-64.so.2  (target linker)
+pwninit
+# Creates: ./challenge_patched (uses local libc)
+
+# Method 2: Manual patchelf
+patchelf --set-interpreter ./ld-linux-x86-64.so.2 ./binary
+patchelf --set-rpath . ./binary
+
+# Verify libc matches
+ldd ./challenge_patched
+# Should show: ./libc.so.6 as libc dependency
+
+# Test locally with correct libc
+from pwn import *
+p = process('./challenge_patched')
+# libc addresses now match remote!`,
+        applicableLibc: 'All versions (must match remote)',
+        references: [
+          { description: 'pwninit GitHub', url: 'https://github.com/Gallopsled/pwninit' },
+          { description: 'patchelf GitHub', url: 'https://github.com/NixOS/patchelf' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['Binary runs with correct libc', 'ldd shows target libc path', 'Exploit offsets match remote'],
+      artifacts: ['./challenge_patched binary', './libc.so.6 and ld-linux in same directory']
+    },
+
+    operatorChecklist: [
+      '[ ] apt install patchelf && pip3 install pwninit',
+      '[ ] Download target libc.so.6 and ld-linux from challenge',
+      '[ ] Run pwninit in challenge directory',
+      '[ ] Verify: ldd ./challenge_patched shows correct libc',
+      '[ ] Test: run binary and verify libc version matches remote'
+    ],
+
+    vulnerabilityTypes: ['tool-setup', 'environment'],
+    references: [
+      { description: 'pwninit', url: 'https://github.com/Gallopsled/pwninit' },
+      { description: 'patchelf', url: 'https://github.com/NixOS/patchelf' }
+    ]
+  },
+
+  setup_qemu: {
+    id: 'setup_qemu',
+    name: 'QEMU + gdb-multiarch Setup',
+    category: 'setup',
+    class: 'tool-setup',
+    description: 'Install QEMU user-mode emulator and gdb-multiarch for cross-architecture pwn challenges (ARM, MIPS, AArch64). Run and debug non-x86 binaries locally.',
+
+    preconditions: {
+      summary: 'Cross-architecture CTF challenges require QEMU to emulate and gdb-multiarch to debug ARM/MIPS/AArch64 binaries.',
+      required: [
+        'QEMU user-mode emulator packages',
+        'gdb-multiarch for debugging',
+        'Target architecture binutils for pwntools ASM/shellcraft',
+        'Target libc.so and ld-linux if provided'
+      ],
+      detectionSteps: [
+        'qemu-arm ./arm_binary (test ARM emulation)',
+        'qemu-aarch64 ./aarch64_binary (test AArch64)',
+        'gdb-multiarch ./arm_binary (test cross-arch debugging)'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'Full Cross-Arch Environment Setup',
+        description: 'Install QEMU, gdb-multiarch, and cross-architecture toolchain for ARM/MIPS debugging.',
+        steps: [
+          'sudo apt install qemu-user qemu-user-static gdb-multiarch',
+          'Install cross binutils: apt install binutils-arm-linux-gnueabihf binutils-mips-linux-gnu',
+          'Test: qemu-arm -L /usr/arm-linux-gnueabihf ./arm_binary',
+          'Debug: qemu-arm -g 1234 ./arm_binary & then gdb-multiarch → target remote :1234',
+          'pwntools: use context.arch = "arm" and process(["qemu-arm", ...])'
+        ],
+        tools: ['qemu-user', 'gdb-multiarch', 'pwntools'],
+        codeSnippet: `# Install QEMU + cross-arch tools
+sudo apt install qemu-user qemu-user-static gdb-multiarch \\
+  binutils-arm-linux-gnueabihf \\
+  binutils-mips-linux-gnu \\
+  binutils-aarch64-linux-gnu
+
+# Run ARM binary locally
+qemu-arm -L /usr/arm-linux-gnueabihf ./arm_binary
+
+# Debug ARM binary with GDB
+qemu-arm -g 1234 ./arm_binary &
+gdb-multiarch ./arm_binary
+# (gdb) set architecture arm
+# (gdb) target remote :1234
+
+# pwntools integration for cross-arch
+from pwn import *
+context.arch = 'arm'  # or 'mips', 'aarch64'
+context.binary = ELF('./arm_binary')
+p = process(['qemu-arm', '-L', '/usr/arm-linux-gnueabihf', './arm_binary'])
+# Or with GDB:
+p = gdb.debug('./arm_binary', arch='arm')`,
+        applicableLibc: 'N/A (emulation tool)',
+        references: [
+          { description: 'QEMU User Mode Docs', url: 'https://www.qemu.org/docs/master/user/main.html' },
+          { description: 'pwn docker setup', url: 'https://github.com/Gallopsled/pwntools/tree/dev/pwnlib/data' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['qemu-arm runs ARM binary', 'gdb-multiarch connects to QEMU stub', 'pwntools process launches with qemu-arm'],
+      artifacts: ['qemu-user installed', 'gdb-multiarch installed', 'cross-arch binutils installed']
+    },
+
+    operatorChecklist: [
+      '[ ] apt install qemu-user qemu-user-static gdb-multiarch',
+      '[ ] Install cross-architecture binutils',
+      '[ ] Test: qemu-arm with ARM test binary',
+      '[ ] Test: gdb-multiarch → target remote :1234',
+      '[ ] Configure pwntools context.arch for target'
+    ],
+
+    vulnerabilityTypes: ['tool-setup', 'cross-architecture'],
+    references: [
+      { description: 'QEMU Documentation', url: 'https://www.qemu.org/docs/master/user/main.html' }
     ]
   }
 };
