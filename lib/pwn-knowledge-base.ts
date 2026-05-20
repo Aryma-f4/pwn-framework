@@ -220,122 +220,68 @@ p.send(payload)`,
   },
 
   format_string_vulnerability: {
-    id: 'format_string_vulnerability',
-    name: 'Format String Vulnerability (FSB)',
-    category: 'technique',
-    class: 'Format String Exploitation',
-    description: 'User-controlled data passed directly as format string to printf/fprintf enabling arbitrary read/write',
+    id: "format_string_vulnerability",
+    name: "Format String Vulnerability (FSB)",
+    category: "technique",
+    class: "Format String Exploitation",
+    description: "Exploit printf-family functions with user-controlled format strings for arbitrary read/write.",
     
     preconditions: {
-      summary: 'User-controlled data is passed directly as the format string argument to printf, fprintf, sprintf, etc.',
+      summary: "User input used as format string argument without %s.",
       required: [
-        'printf(user_input) instead of printf("%s", user_input)',
-        'Attacker controls the format string content completely',
-        'Binary must be running (FSB is runtime-only attack)',
-        'Stack readable: %p/%x chains can dump stack contents',
-        'Write primitive: %n, %hn, %hhn available (usually not restricted on Linux)'
+        "Vulnerable func: printf(user_input)",
+        "Controllable input string"
       ],
       detectionSteps: [
-        'Send "%p.%p.%p.%p.%p.%p.%p.%p" — if addresses print back, FSB confirmed',
-        'Send "%7$p" to read specific stack argument by index',
-        'Send AAAA.%p.%p... to locate where input appears on stack (offset discovery)',
-        'In GDB: set breakpoint at printf, inspect rsi/rdx/... (format arg registers)'
+        "1. Fuzz: Send `%p.%p.%p`",
+        "2. Verify: Output shows memory addresses",
+        "3. Find Offset: Send `AAAA.%p.%p...` until `0x41414141` appears"
       ],
       offsetDiscovery: {
-        'manual': 'Send "AAAA" + ".%p"*N until 0x41414141 appears in output',
-        'pwntools': 'for i in range(1,50): p.sendline(f"%{i}$p"); leak = p.recvline()'
+        "pwntools FmtStr": "def exec_fmt(p): ...; fmt = FmtStr(exec_fmt)",
+        "manual": "Send AAAA + .%p*N until 0x41414141 appears"
       }
     },
     
     exploitationPaths: [
       {
-        name: 'Arbitrary Read (info-leak)',
-        description: 'Leak sensitive data from stack/memory (canary, PIE base, libc base)',
+        name: "Arbitrary Read (Memory Leak)",
+        description: "Read stack contents or specific memory addresses.",
         steps: [
-          'Use %<N>$p or %<N>$s to read N-th printf argument position',
-          'Target: stack canary (usually at fixed offset from format string on stack)',
-          'Target: saved RIP on stack → compute binary base (if PIE)',
-          'Target: libc function pointer on stack → compute libc base',
-          'Chain leaks: canary + PIE + libc for multi-stage exploitation'
+          "1. Find target address to leak (e.g., GOT entry for puts)",
+          "2. Find the offset of your input on the stack",
+          "3. Build payload: [Address] + %<offset>$s"
         ],
-        tools: ['pwntools fmtstr_payload', 'manual %N$p probing', 'pwndbg telescope'],
-        codeSnippet: `for i in range(1, 20):
-    p.sendline(f'%{i}$p')
-    leak = p.recvline()
-    if b'0x' in leak:
-        print(f'Position {i}: {leak}')`,
-        references: [
-          { description: 'Format String Vulnerability - CTF101', url: 'https://ctf101.org/binary-exploitation/format-string/' }
-        ]
+        tools: ["pwntools fmtstr"],
+        codeSnippet: "payload = p64(got_puts) + b\"%7$s\"\np.sendline(payload)"
       },
       {
-        name: 'Arbitrary Write via %n',
-        description: 'Overwrite memory locations (GOT, hooks, return addresses)',
+        name: "Arbitrary Write (%n)",
+        description: "Write data to arbitrary memory addresses.",
         steps: [
-          'Use %<value>c%<N>$n to write "value" bytes count to address at position N',
-          '%n writes 4 bytes (int), %hn writes 2 bytes, %hhn writes 1 byte (most precise)',
-          'Common targets: GOT entry of called function, return address, __malloc_hook, __exit_funcs',
-          'Pad with %c.%c... to reach desired byte count before %n'
+          "1. Find target address to write (e.g., GOT entry for printf)",
+          "2. Find the offset of your input on the stack",
+          "3. Build payload: Write system() address to printf GOT"
         ],
-        tools: ['pwntools fmtstr_payload(offset, {target: value})', 'manual calculation', 'pwndbg got command'],
-        codeSnippet: `# Write 0x1234 to GOT entry at position 6
-payload = fmtstr_payload(6, {got_addr: system_addr}, numbwritten=0)
-p.sendline(payload)`,
-        applicableLibc: 'Most versions; hooks removed in libc 2.34+',
-        references: [
-          { description: 'House of Spirit via Format String' }
-        ]
-      },
-      {
-        name: 'Canary Leak + Stack Overflow (combined attack)',
-        description: 'Use FSB to leak canary, then perform SBOF with correct canary value',
-        steps: [
-          'Leak canary via %<N>$p at known canary stack offset',
-          'Leak PIE base via saved RIP if needed',
-          'Leak libc via stored pointer if needed',
-          'Trigger buffer overflow with correct canary spliced into payload',
-          'Combine SBOF and FSB for maximum bypass coverage'
-        ],
-        tools: ['pwntools', 'pwndbg canary command'],
-        references: [
-          { description: 'Multi-layer exploit techniques' }
-        ]
+        tools: ["pwntools fmtstr_payload"],
+        codeSnippet: "writes = {got_printf: system_addr}\npayload = fmtstr_payload(offset, writes)\np.sendline(payload)"
       }
     ],
     
     postconditions: {
-      successIndicators: [
-        'Arbitrary memory read confirmed (addresses printed back)',
-        'Target memory location overwritten with attacker-controlled value',
-        'Control flow redirected (GOT hijack, return address overwrite)',
-        'Shell obtained or flag read via modified function pointer'
-      ],
-      artifacts: [
-        'Leaked canary/PIE/libc values in exploit output',
-        'Overwritten GOT verified via pwndbg "got" command',
-        'Shell session obtained'
-      ]
+      successIndicators: ["Memory leaked successfully", "GOT overwritten"],
+      artifacts: ["Leaked values"]
     },
     
     operatorChecklist: [
-      '[ ] Confirm FSB: send "%p.%p.%p" and verify address leak from output',
-      '[ ] Discover format string stack offset (where input appears as printf argument)',
-      '[ ] Leak canary if checksec shows canary=yes (CRITICAL)',
-      '[ ] Leak PIE base if PIE enabled via saved RIP on stack',
-      '[ ] Leak libc base via GOT pointer on stack or %s GOT read',
-      '[ ] Identify write target based on RELRO status (GOT, hook, ret addr)',
-      '[ ] Use pwntools fmtstr_payload() or craft manual %<N>$<width>hhn chain',
-      '[ ] Verify write in local GDB before sending to remote',
-      '[ ] Trigger overwritten function to execute payload (shell/one_gadget)'
+      "[ ] Verify format string works",
+      "[ ] Find exact input offset on stack",
+      "[ ] Check RELRO (Partial/No RELRO required for GOT overwrite)"
     ],
     
-    vulnerabilityTypes: ['format'],
+    vulnerabilityTypes: ["CWE-134", "Format String"],
     
-    references: [
-      { tool: 'pwntools', description: 'fmtstr_payload for automated FSB exploitation' },
-      { description: 'Format String Attack - Wikipedia', url: 'https://en.wikipedia.org/wiki/Printf_format_string_attack' },
-      { description: 'Format String Vulnerability Exploitation', url: 'https://ctf101.org/binary-exploitation/format-string/' }
-    ]
+    references: []
   },
 
   heap_buffer_overflow: {
@@ -343,117 +289,57 @@ p.sendline(payload)`,
     name: 'Heap Buffer Overflow',
     category: 'technique',
     class: 'Heap Exploitation',
-    description: 'Overflow heap-allocated chunks to corrupt metadata or adjacent objects',
+    description: 'Overflow heap chunks to corrupt metadata (chunk size, size flag, fd/bk pointers) of adjacent chunks.',
     
     preconditions: {
-      summary: 'Data written to heap-allocated chunk overflows into adjacent chunk metadata or data, corrupting allocator structures',
+      summary: 'Missing bounds checks on heap-allocated buffers.',
       required: [
-        'Heap allocation (malloc/calloc/realloc/new) used for user data',
-        'Input written without size check, allowing overflow into next chunk header',
-        'Attacker controls overflow length and content',
-        'malloc version determines available techniques (check via: strings libc.so | grep GNU C)'
+        'Vulnerable heap buffer input',
+        'Controllable overflow size and data'
       ],
       detectionSteps: [
-        'In GDB: heap (pwndbg) → inspect chunk layout',
-        'Send large input to heap-stored buffer → check if next chunk prev_size/size corrupted',
-        'Trigger free() after overflow → "corrupted double-linked list" indicates successful write',
-        'Use pwndbg "vis_heap_chunks" for visual chunk layout and metadata'
+        '1. GDB: `heap` or `vis` to view chunks',
+        '2. Fuzz: Send oversized input to target chunk',
+        '3. Inspect: Verify next chunk header fields (size, flags) are overwritten'
       ],
       offsetDiscovery: {
-        'pwndbg': 'heap → chunks → identify target chunk size field offset',
-        'manual': 'Calculate: buffer_size + 16 (chunk header size) = overflow trigger point'
+        'manual': 'Offset = allocated chunk data size + 8 (for next chunk header size field)'
       }
     },
     
     exploitationPaths: [
       {
-        name: 'fastbin dup / tcache dup (double free)',
-        description: 'Free same chunk twice to create overlapping allocations',
+        name: 'Tcache Poisoning (glibc >= 2.26)',
+        description: 'Corrupt next-pointer of a freed chunk in tcache to get arbitrary allocation.',
         steps: [
-          'Free same chunk twice → chunk appears twice in bin',
-          'Allocate twice to get overlapping chunks with controlled content',
-          'Overwrite fd pointer to target address (use safe-linking XOR if needed)',
-          'Allocate until fake chunk returned at target address',
-          'Write controlled payload to arbitrary memory'
+          '1. Allocate chunk A and chunk B',
+          '2. Free chunk A (freed chunk is now in tcache)',
+          '3. Overflow A from B (or UAF write on A) to overwrite fd/next pointer to target target_addr',
+          '4. Allocate chunk (gets A), allocate again (gets chunk at target_addr)',
+          '5. Write payload to target_addr'
         ],
-        tools: ['pwndbg bins', 'pwntools malloc_chunk parsing'],
-        applicableLibc: '< 2.26 for fastbin; tcache dup in 2.26-2.28 (no key check)',
-        codeSnippet: `free(chunk)  # First free
-free(chunk)  # Double free → chunk in bin twice
-malloc(size) # Allocate → get original chunk
-malloc(size) # Allocate → get chunk with corrupted fd`,
-        references: [
-          { description: 'How2Heap: fastbin_dup', url: 'https://github.com/shellphish/how2heap' }
-        ]
-      },
-      {
-        name: 'tcache poisoning (libc 2.26+)',
-        description: 'Corrupt tcache bin to allocate at arbitrary address',
-        steps: [
-          'Free chunk into tcache',
-          'Overflow into tcache entry and corrupt fd pointer to &target - 0x10',
-          'Allocate twice: first returns original chunk, second returns fake chunk at target',
-          'Write controlled data to arbitrary address (libc 2.32+ requires safe-linking bypass)',
-          'For safe-linking (2.32+): fd_stored = (chunk_addr >> 12) XOR target'
-        ],
-        tools: ['pwndbg bins', 'pwndbg vis_heap_chunks', 'pwntools'],
-        applicableLibc: '2.26 to 2.31 (no safe-linking); 2.32+ with safe-linking',
-        references: [
-          { description: 'How2Heap: tcache_poisoning' },
-          { description: 'Safe-linking in glibc', url: 'https://www.qualys.com/2019/12/18/cve-2019-19363.txt' }
-        ]
-      },
-      {
-        name: 'House of Force (libc < 2.29)',
-        description: 'Corrupt top chunk size to allocate at arbitrary address',
-        steps: [
-          'Overflow into top chunk size field, set to 0xffffffffffffffff',
-          'Allocate large chunk with calculated size to advance top pointer to target',
-          'Next allocation returns chunk at target address',
-          'Write controlled data to target via standard malloc/free workflow'
-        ],
-        tools: ['pwndbg vis_heap_chunks', 'pwntools'],
-        applicableLibc: '< 2.29',
-        references: [
-          { description: 'House of Force technique' }
-        ]
+        tools: ['pwndbg tcachebins'],
+        codeSnippet: `malloc(0x20) # chunk A
+free(chunk_A)
+# Overflow/UAF write chunk_A->fd with target_addr
+malloc(0x20) # returns chunk_A
+malloc(0x20) # returns target_addr!`
       }
     ],
     
     postconditions: {
-      successIndicators: [
-        'Heap chunk metadata corrupted (size/fd/bk fields)',
-        'Arbitrary allocation primitive achieved',
-        'Write/read to controlled memory location',
-        'Code execution via __malloc_hook or similar'
-      ],
-      artifacts: [
-        'pwndbg "heap" command shows corrupted chunk',
-        'Successful allocation at target address',
-        'Shell session'
-      ]
+      successIndicators: ['Arbitrary allocation achieved', 'Heap state successfully modified'],
+      artifacts: ['Heap visualization log']
     },
     
     operatorChecklist: [
-      '[ ] Identify heap allocation and overflow vector',
-      '[ ] Run checksec → note libc version (determines applicable techniques)',
-      '[ ] In GDB: heap → vis_heap_chunks → understand target chunk layout',
-      '[ ] Determine libc version (ldd, strings, or libc.rip)',
-      '[ ] Select exploitation path (fastbin/tcache/House of Force based on version)',
-      '[ ] Craft overflow payload to corrupt target metadata field',
-      '[ ] Test locally: trigger malloc → verify arbitrary address allocation',
-      '[ ] For safe-linking bypass: leak heap address first',
-      '[ ] Write payload to allocated target address',
-      '[ ] Trigger code execution via overwritten hook or function pointer'
+      '[ ] Determine glibc version (crucial for heap techniques)',
+      '[ ] Check if Safe Linking XOR protection is enabled (glibc >= 2.32)',
+      '[ ] Keep heap layout clean and aligned'
     ],
     
-    vulnerabilityTypes: ['heap'],
-    
-    references: [
-      { tool: 'how2heap', description: 'Heap exploitation techniques repository', url: 'https://github.com/shellphish/how2heap' },
-      { tool: 'pwndbg', description: 'heap command for visualizing malloc structures' },
-      { description: 'Heap Exploitation CTF101', url: 'https://ctf101.org/binary-exploitation/heap/' }
-    ]
+    vulnerabilityTypes: ['CWE-122', 'Heap Overflow'],
+    references: []
   },
 
   sandbox_escape: {
@@ -461,94 +347,54 @@ malloc(size) # Allocate → get chunk with corrupted fd`,
     name: 'Sandbox / Seccomp Escape',
     category: 'technique',
     class: 'Sandbox Bypass',
-    description: 'Bypass seccomp filters and sandboxes to achieve code execution',
+    description: 'Bypass seccomp-bpf filters (sandboxes) typically by using ORW (Open-Read-Write) chains.',
     
     preconditions: {
-      summary: 'Process is restricted by seccomp BPF filter limiting available syscalls',
+      summary: 'Process is restricted by a seccomp BPF filter.',
       required: [
-        'seccomp-bpf filter installed via prctl(PR_SET_SECCOMP)',
-        'Attacker must determine allowed syscalls (dump via seccomp-tools)',
-        'Standard execution syscalls (execve) typically blocked',
-        'Often allows: open, read, write, exit (ORW techniques)',
-        'File descriptors may be pre-opened or seekable'
+        'seccomp-bpf filter active',
+        'Standard execution syscalls (execve) blocked',
+        'Alternative syscalls (open/read/write) or equivalents allowed'
       ],
       detectionSteps: [
-        'Run: seccomp-tools dump ./binary → inspect BPF rules',
-        'Run: strace ./binary 2>&1 | grep -E "prctl|seccomp"',
-        'Attempt execve syscall → SIGSYS signal indicates blocked',
-        'Check available syscalls via seccomp-tools output'
+        '1. Dump rules: `seccomp-tools dump ./binary`',
+        '2. Analyze: Check if execve is KILL/ERR',
+        '3. Plan: Find alternative allowed syscalls'
       ]
     },
     
     exploitationPaths: [
       {
-        name: 'ORW (open/read/write) chain',
-        description: 'Read flag file using open/read/write syscalls instead of execve',
+        name: 'ORW (Open-Read-Write) Chain',
+        description: 'Read the flag using open(), read(), write() syscalls instead of spawning a shell.',
         steps: [
-          'Identify allowed syscalls: typically open(2), read(3), write(4)',
-          'Build ROP chain: open(flag_path) → read(fd, buf, 0x100) → write(1, buf, 0x100)',
-          'Flag content written to stdout, readable to attacker',
-          'Chain each syscall with proper argument registers (rax, rdi, rsi, rdx)'
+          '1. Find gadgets for: syscall, pop rdi, pop rsi, pop rdx, pop rax',
+          '2. Call open("flag.txt", O_RDONLY)',
+          '3. Call read(fd, buffer, size)',
+          '4. Call write(1, buffer, size) to print the flag'
         ],
-        tools: ['ROPgadget', 'pwntools SigreturnFrame', 'seccomp-tools'],
-        codeSnippet: `rop = ROP(binary)
-rop(rax=2)  # open syscall
-rop(rdi=flag_addr, rsi=0, rdx=0)  # filename, O_RDONLY, 0
-rop(syscall)
-# ... repeat for read(3) and write(4)`,
-        references: [
-          { description: 'ORW technique for sandboxed exploitation' }
-        ]
-      },
-      {
-        name: 'Seccomp filter bypass (vulnerable policies)',
-        description: 'Exploit logical flaws in BPF filter rules',
-        steps: [
-          'Analyze seccomp-tools output for logical gaps',
-          'Some filters allow execve but block execveat, or vice versa',
-          'Some allow clone but block fork (or similar variant syscalls)',
-          'Craft chain using allowed variant syscall',
-          'Test each variant systematically'
-        ],
-        tools: ['seccomp-tools', 'ltrace', 'strace'],
-        references: [
-          { description: 'Seccomp bypass via logical flaws' }
-        ]
+        tools: ['seccomp-tools', 'ROPgadget', 'pwntools ROP'],
+        codeSnippet: `rop.call('open', [flag_str_addr, 0])
+rop.call('read', [3, bss_buffer, 0x100])
+rop.call('write', [1, bss_buffer, 0x100])`
       }
     ],
     
     postconditions: {
-      successIndicators: [
-        'Seccomp SIGSYS no longer triggered for required syscalls',
-        'Flag file read and output captured',
-        'Code execution achieved within sandbox constraints'
-      ],
-      artifacts: [
-        'Flag content in stdout/stderr',
-        'seccomp-tools dump showing allowed syscalls',
-        'ORW ROP chain execution confirmed'
-      ]
+      successIndicators: ['Flag file read and output captured via stdout'],
+      artifacts: ['seccomp-tools dump']
     },
     
     operatorChecklist: [
-      '[ ] Run seccomp-tools dump → document allowed syscalls',
-      '[ ] Identify if execve is available (usually not in CTF)',
-      '[ ] If blocked: design ORW chain (open/read/write)',
-      '[ ] Find gadgets: syscall, pop rax, pop rdi, pop rsi, pop rdx',
-      '[ ] Build ROP chain: open(flag) → read(fd,buf,size) → write(1,buf,size)',
-      '[ ] Verify each syscall number (rax=2 open, 3 read, 4 write)',
-      '[ ] Test locally: confirm flag readable via stdout',
-      '[ ] Alternative: check for execveat, execve with args, clone variants',
-      '[ ] Send exploit to remote target'
+      '[ ] Run seccomp-tools dump',
+      '[ ] Check if open/openat are allowed',
+      '[ ] Check if read/pread64/readv are allowed',
+      '[ ] Check if write/pwrite64/writev are allowed',
+      '[ ] Build ORW ROP chain'
     ],
     
-    vulnerabilityTypes: ['sandbox'],
-    
-    references: [
-      { tool: 'seccomp-tools', description: 'Dump and analyze seccomp BPF filters', url: 'https://github.com/david942j/seccomp-tools' },
-      { description: 'Seccomp Exploitation Techniques', url: 'https://lkmidas.github.io/posts/20210105-seccomp/' },
-      { tool: 'pwntools', description: 'ROP gadget chaining for syscall automation' }
-    ]
+    vulnerabilityTypes: ['Sandbox', 'Seccomp'],
+    references: []
   },
 
   ret2csu: {
