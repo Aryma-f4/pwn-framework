@@ -3600,7 +3600,337 @@ exit(0)  # → _IO_wfile_overflow → one_gadget`,
     ]
   },
 
+  // ============== PREREQUISITES ==============
+
+  memory_layout: {
+    id: 'memory_layout',
+    name: 'Memory Layout',
+    category: 'leaf',
+    class: 'Prerequisite',
+    description: 'Understanding of Process Memory Map: Text, Data, BSS, Heap, and Stack segments.',
+    preconditions: {
+      summary: 'Basic understanding of how a process is loaded into memory.',
+      required: ['Linux system', 'Compiled binary'],
+      detectionSteps: ['Run `cat /proc/<pid>/maps` while binary is running to see segments'],
+    },
+    exploitationPaths: [
+      {
+        name: 'Analyzing Memory Map',
+        description: 'Using tools to examine memory layout.',
+        steps: [
+          'Run the binary under GDB',
+          'Use `vmmap` or `info proc mappings` to view the memory segments',
+          'Identify the permissions of each segment (rwx)',
+        ],
+        tools: ['GDB', 'pwndbg', 'cat /proc/<pid>/maps'],
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Identified readable, writable, executable regions.'],
+      artifacts: ['Memory map layout notes'],
+    },
+    operatorChecklist: ['Check for executable stack (NX disabled)', 'Check for PIE (randomized code segment)'],
+    vulnerabilityTypes: ['General'],
+    references: []
+  },
+
+  calling_conventions: {
+    id: 'calling_conventions',
+    name: 'Calling Conventions',
+    category: 'leaf',
+    class: 'Prerequisite',
+    description: 'How arguments are passed to functions (e.g., x64 Linux: rdi, rsi, rdx, rcx, r8, r9).',
+    preconditions: {
+      summary: 'Knowledge of assembly and how functions receive data.',
+      required: ['Target architecture (x86_64, x86, ARM, etc.)'],
+      detectionSteps: [],
+    },
+    exploitationPaths: [
+      {
+        name: 'Setting up arguments',
+        description: 'Using gadgets to set registers before a function call.',
+        steps: [
+          'Find ROP gadgets (e.g., `pop rdi; ret`)',
+          'Place the argument value on the stack',
+          'Execute the gadget to pop the value into the correct register',
+          'Call the target function',
+        ],
+        tools: ['Ropper', 'ROPgadget', 'pwntools'],
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Function successfully called with controlled arguments.'],
+      artifacts: ['ROP chain payload'],
+    },
+    operatorChecklist: ['Verify correct register order for architecture', 'Ensure stack alignment (16-byte for x86_64 before call)'],
+    vulnerabilityTypes: ['General'],
+    references: []
+  },
+
+  elf_format: {
+    id: 'elf_format',
+    name: 'ELF File Format',
+    category: 'leaf',
+    class: 'Prerequisite',
+    description: 'Executable and Linkable Format: Sections, Segments, Program Headers.',
+    preconditions: {
+      summary: 'Understanding of the ELF binary structure.',
+      required: ['ELF binary'],
+      detectionSteps: ['Use `readelf -a <binary>` to inspect'],
+    },
+    exploitationPaths: [
+      {
+        name: 'Parsing ELF',
+        description: 'Extracting useful information from the ELF file.',
+        steps: [
+          'Identify sections like `.text`, `.data`, `.bss`, `.plt`, `.got`',
+          'Find the entry point address',
+          'Check for dynamically linked libraries',
+        ],
+        tools: ['readelf', 'objdump', 'pwntools (ELF class)'],
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Found addresses of important sections or functions.'],
+      artifacts: ['ELF analysis report'],
+    },
+    operatorChecklist: ['Check dynamically linked vs statically linked', 'Find address of `.bss` for writing data'],
+    vulnerabilityTypes: ['General'],
+    references: []
+  },
+
+  plt_got: {
+    id: 'plt_got',
+    name: 'PLT / GOT',
+    category: 'leaf',
+    class: 'Prerequisite',
+    description: 'Procedure Linkage Table and Global Offset Table mechanisms for dynamic linking.',
+    preconditions: {
+      summary: 'Understanding of lazy binding in dynamically linked ELFs.',
+      required: ['Dynamically linked ELF binary'],
+      detectionSteps: ['Use `objdump -R <binary>` to see GOT entries'],
+    },
+    exploitationPaths: [
+      {
+        name: 'GOT Overwrite',
+        description: 'Overwriting a GOT entry to redirect execution.',
+        steps: [
+          'Identify the GOT address of a target function (e.g., `puts`)',
+          'Find a primitive (e.g., format string, arbitrary write) to write to this address',
+          'Write the address of another function (e.g., `system`) or a one_gadget to the GOT entry',
+          'Trigger the original function to execute the new code',
+        ],
+        tools: ['objdump', 'pwntools', 'GDB'],
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Execution redirected when target function is called.'],
+      artifacts: ['Payload with GOT overwrite'],
+    },
+    operatorChecklist: ['Verify RELRO status (Partial or No RELRO required)', 'Confirm the target function is called after overwrite'],
+    vulnerabilityTypes: ['General'],
+    references: []
+  },
+
+  glibc_malloc: {
+    id: 'glibc_malloc',
+    name: 'Glibc Malloc Internals',
+    category: 'leaf',
+    class: 'Prerequisite',
+    description: 'Understanding chunks, arenas, bins (fast, unsorted, small, large), and tcache.',
+    preconditions: {
+      summary: 'Understanding of glibc heap memory management.',
+      required: ['Binary using glibc malloc'],
+      detectionSteps: ['Use `vmmap` in GDB to see heap segment'],
+    },
+    exploitationPaths: [
+      {
+        name: 'Analyzing Heap State',
+        description: 'Using GDB to inspect heap structures.',
+        steps: [
+          'Run binary and allocate some chunks',
+          'Break in GDB and use `heap` or `vis_heap_chunks` in pwndbg/gef',
+          'Inspect the free bins using `bins` or `tcachebins` command',
+        ],
+        tools: ['GDB (pwndbg/gef)'],
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Understanding of current heap layout and free lists.'],
+      artifacts: ['Heap layout analysis'],
+    },
+    operatorChecklist: ['Identify glibc version', 'Check if tcache is enabled (glibc >= 2.26)'],
+    vulnerabilityTypes: ['Heap'],
+    references: []
+  },
+
+
   // ============== ENVIRONMENT SETUP ==============
+
+  // ============== TOOLS ==============
+
+  pwndbg: {
+    id: 'pwndbg',
+    name: 'pwndbg',
+    category: 'leaf',
+    class: 'Tool',
+    description: 'GDB plug-in that makes debugging with GDB suck less.',
+    preconditions: {
+      summary: 'GDB installed.',
+      required: ['GDB', 'Python3'],
+      detectionSteps: [],
+    },
+    exploitationPaths: [
+      {
+        name: 'Using pwndbg',
+        description: 'Common commands for exploit dev.',
+        steps: [
+          'Run `gdb ./binary`',
+          'Use `vmmap` to check memory segments',
+          'Use `checksec` to see protections',
+          'Use `telescope` or `x/gx` to view stack/memory',
+        ],
+        tools: ['GDB'],
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Successfully debugged binary.'],
+      artifacts: [],
+    },
+    operatorChecklist: ['Install via git clone and setup.sh'],
+    vulnerabilityTypes: ['General'],
+    references: []
+  },
+
+  gef: {
+    id: 'gef',
+    name: 'GEF',
+    category: 'leaf',
+    class: 'Tool',
+    description: 'GDB Enhanced Features for exploit devs & reversers.',
+    preconditions: {
+      summary: 'GDB installed.',
+      required: ['GDB', 'Python3'],
+      detectionSteps: [],
+    },
+    exploitationPaths: [
+      {
+        name: 'Using GEF',
+        description: 'Common commands for exploit dev.',
+        steps: [
+          'Run `gdb ./binary`',
+          'Use `pattern create` and `pattern search` for offsets',
+          'Use `checksec` to see protections',
+          'Use `heap chunks` to inspect heap',
+        ],
+        tools: ['GDB'],
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Successfully debugged binary.'],
+      artifacts: [],
+    },
+    operatorChecklist: ['Install via curl script'],
+    vulnerabilityTypes: ['General'],
+    references: []
+  },
+
+  pwntools: {
+    id: 'pwntools',
+    name: 'pwntools',
+    category: 'leaf',
+    class: 'Tool',
+    description: 'CTF framework and exploit development library for Python.',
+    preconditions: {
+      summary: 'Python3 installed.',
+      required: ['Python3', 'pip'],
+      detectionSteps: [],
+    },
+    exploitationPaths: [
+      {
+        name: 'Writing Exploit Script',
+        description: 'Basic template for pwntools script.',
+        steps: [
+          'Import: `from pwn import *`',
+          'Set context: `context.binary = elf = ELF("./binary")`',
+          'Start process: `p = process()` or `p = remote("host", port)`',
+          'Interact: `p.sendline(payload)`, `p.interactive()`',
+        ],
+        tools: ['Python'],
+        codeSnippet: 'from pwn import *\nelf = context.binary = ELF("./binary")\np = process()\np.interactive()'
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Exploit script executed successfully.'],
+      artifacts: ['exploit.py'],
+    },
+    operatorChecklist: ['Install via `pip install pwntools`'],
+    vulnerabilityTypes: ['General'],
+    references: []
+  },
+
+  ropper: {
+    id: 'ropper',
+    name: 'Ropper',
+    category: 'leaf',
+    class: 'Tool',
+    description: 'Tool to search for gadgets to build ROP chains.',
+    preconditions: {
+      summary: 'Python3 installed.',
+      required: ['Python3'],
+      detectionSteps: [],
+    },
+    exploitationPaths: [
+      {
+        name: 'Finding Gadgets',
+        description: 'Searching for specific instructions.',
+        steps: [
+          'Run `ropper --file ./binary --search "pop rdi"`',
+          'Extract the address of the desired gadget',
+        ],
+        tools: ['CLI'],
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Found required ROP gadgets.'],
+      artifacts: ['Gadget addresses'],
+    },
+    operatorChecklist: ['Install via `pip install ropper`'],
+    vulnerabilityTypes: ['General'],
+    references: []
+  },
+
+  one_gadget: {
+    id: 'one_gadget',
+    name: 'one_gadget',
+    category: 'leaf',
+    class: 'Tool',
+    description: 'Tool to find the execve("/bin/sh", NULL, NULL) call in libc.',
+    preconditions: {
+      summary: 'Ruby installed.',
+      required: ['Ruby', 'gem'],
+      detectionSteps: [],
+    },
+    exploitationPaths: [
+      {
+        name: 'Finding One Gadgets',
+        description: 'Extracting one_gadget offsets from libc.',
+        steps: [
+          'Run `one_gadget /path/to/libc.so.6`',
+          'Check the constraints for each gadget (e.g., `rcx == NULL`)',
+          'Add the offset to the libc base address in exploit script',
+        ],
+        tools: ['CLI'],
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Found one_gadget offsets and constraints.'],
+      artifacts: ['One gadget offsets'],
+    },
+    operatorChecklist: ['Install via `gem install one_gadget`', 'Ensure constraints are satisfied at the time of execution'],
+    vulnerabilityTypes: ['General'],
+    references: []
+  },
 
   setup_gdb: {
     id: 'setup_gdb',
