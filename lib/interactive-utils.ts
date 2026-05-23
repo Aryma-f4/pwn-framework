@@ -224,6 +224,205 @@ export const TECHNIQUE_TOOLTIPS: Record<string, TooltipConfig> = {
     relatedTechniques: ['kernel-priv-esc']
   },
 
+  // ─── MITIGATIONS ───
+  'aslr-prot': {
+    title: 'ASLR / PIE',
+    description: 'Address Space Layout Randomization randomizes memory base addresses. PIE applies it to the binary itself.',
+    difficulty: 'Easy',
+    tactics: ['Address Randomization', 'Info Leak Required'],
+    relatedTechniques: ['info-leak-bypass', 'partial-overwrite']
+  },
+  'info-leak-bypass': {
+    title: 'Information Leak (ASLR Bypass)',
+    description: 'Leak a pointer via format string or OOB read to calculate randomized addresses.',
+    difficulty: 'Medium',
+    tactics: ['Address Leak', 'ASLR Bypass', 'libc Base Calculation'],
+    relatedTechniques: ['format-leak', 'canary-leak']
+  },
+  'partial-overwrite': {
+    title: 'Partial Overwrite',
+    description: 'Overwrite only the least significant bytes of a pointer to bypass ASLR without a full leak.',
+    difficulty: 'Hard',
+    tactics: ['LSB Overwrite', 'Nibble Brute Force', 'ASLR Bypass Without Leak'],
+    relatedTechniques: ['aslr-prot']
+  },
+  'nx-prot': {
+    title: 'NX (No-Execute)',
+    description: 'Marks stack/heap as non-executable, preventing shellcode injection. Forces code-reuse attacks.',
+    difficulty: 'Easy',
+    tactics: ['DEP Enforcement', 'Shellcode Blocked', 'ROP Required'],
+    relatedTechniques: ['rop-chain']
+  },
+  'canary-prot': {
+    title: 'Stack Canaries',
+    description: 'Random sentinel value before return address. Overwriting it triggers __stack_chk_fail.',
+    difficulty: 'Easy',
+    tactics: ['Stack Smash Detection', 'Canary Leak Needed'],
+    relatedTechniques: ['canary-leak', 'canary-bruteforce']
+  },
+  'relro-prot': {
+    title: 'RELRO',
+    description: 'RELRO hardens the GOT. Full RELRO makes it read-only; Partial still allows overwrites.',
+    difficulty: 'Easy',
+    tactics: ['GOT Protection', 'Hook/FSOP Required for Full RELRO'],
+    relatedTechniques: ['got-overwrite', 'relro-bypass']
+  },
+
+  // ─── FORMAT STRING ───
+  'format-string': {
+    title: 'Format String Vulnerability',
+    description: 'User input passed as printf format string enables reading/writing arbitrary memory.',
+    difficulty: 'Medium',
+    tactics: ['Info Leak (%p)', 'Arbitrary Write (%n)', 'GOT Overwrite'],
+    relatedTechniques: ['got-overwrite', 'canary-leak']
+  },
+  'format-leak': {
+    title: 'Memory Leak via %x/%p',
+    description: 'Use format string read specifiers to leak stack and memory values (canary, libc, heap).',
+    difficulty: 'Easy',
+    tactics: ['Stack Read', 'Canary Leak', 'libc Leak'],
+    relatedTechniques: ['format-string', 'leak-libc']
+  },
+  'format-write': {
+    title: 'Memory Write via %n',
+    description: 'Use format string %n specifier to write arbitrary values to memory addresses.',
+    difficulty: 'Medium',
+    tactics: ['Arbitrary Write', 'GOT Overwrite', 'Short Writes (%hn)'],
+    relatedTechniques: ['got-overwrite', 'format-string']
+  },
+  'leak-libc': {
+    title: 'Leak libc Address',
+    description: 'Extract a libc pointer from the stack or GOT to calculate libc base and bypass ASLR.',
+    difficulty: 'Easy',
+    tactics: ['Pointer Leak', 'Offset Calculation', 'ASLR Bypass'],
+    relatedTechniques: ['format-leak', 'rop-chain']
+  },
+  'leak-stack': {
+    title: 'Leak Stack Values',
+    description: 'Read values directly from the stack using format string or OOB read.',
+    difficulty: 'Easy',
+    tactics: ['Stack Read', 'Canary Leak', 'Offset Discovery'],
+    relatedTechniques: ['format-leak', 'canary-leak']
+  },
+  'got-overwrite': {
+    title: 'GOT Overwrite',
+    description: 'Overwrite GOT entry to redirect function calls to attacker-controlled code (e.g., puts→system).',
+    difficulty: 'Medium',
+    tactics: ['GOT Hijack', 'Function Redirection', 'Partial/No RELRO Required'],
+    relatedTechniques: ['format-write', 'relro-bypass']
+  },
+  'stack-chk-fail-hijack': {
+    title: '__stack_chk_fail Hijack',
+    description: 'Overwrite GOT of __stack_chk_fail so triggering a canary violation calls arbitrary code.',
+    difficulty: 'Medium',
+    tactics: ['Canary Violation Hijack', 'GOT Overwrite Variant'],
+    relatedTechniques: ['canary-prot', 'got-overwrite']
+  },
+  'blind-format': {
+    title: 'Blind Format String',
+    description: 'Format string with no output echo — infer data via crash timing or side channels.',
+    difficulty: 'Expert',
+    tactics: ['Crash Oracle', 'Timing Side Channel', 'Byte-by-byte Write'],
+    relatedTechniques: ['format-string', 'brop']
+  },
+
+  // ─── STACK TECHNIQUES ───
+  'rop-bypass': {
+    title: 'Code Reuse (ROP)',
+    description: 'Chain existing ret-terminated code gadgets to bypass NX and execute arbitrary logic.',
+    difficulty: 'Medium',
+    tactics: ['Gadget Chaining', 'NX Bypass', 'ret2libc'],
+    relatedTechniques: ['rop-chain', 'ret2csu']
+  },
+  'stack-clash': {
+    title: 'Stack Clash',
+    description: 'Jump over the stack guard page to make stack overlap with heap/mmap memory regions.',
+    difficulty: 'Hard',
+    tactics: ['Guard Page Jump', 'Cross-region Overflow'],
+    relatedTechniques: ['buffer-overflow']
+  },
+  'heap-spray': {
+    title: 'Heap Spray',
+    description: 'Allocate massive amounts of controlled heap data at predictable addresses for exploitation.',
+    difficulty: 'Medium',
+    tactics: ['Predictable Addressing', 'NOP Sled', 'UAF Fill'],
+    relatedTechniques: ['uaf', 'vtable-hijack']
+  },
+
+  // ─── HEAP ADDITIONS ───
+  'house-of-lore': {
+    title: 'House of Lore',
+    description: 'Corrupts smallbin bk pointer to make malloc return arbitrary address via fake chunk linkage.',
+    difficulty: 'Hard',
+    tactics: ['Smallbin Corruption', 'Arbitrary Allocation', 'bk Pointer Abuse'],
+    relatedTechniques: ['unsorted-bin-attack', 'tcache-stashing']
+  },
+  'overlapping-chunks': {
+    title: 'Overlapping Chunks',
+    description: 'Corrupts chunk size to create overlapping allocations — read/write through one chunk affects another.',
+    difficulty: 'Hard',
+    tactics: ['Size Corruption', 'Overlapping R/W', 'tcache Poisoning'],
+    relatedTechniques: ['poison-null-byte', 'house-of-einherjar']
+  },
+  'signal-handler-exploit': {
+    title: 'Signal Handler Exploitation',
+    description: 'Abuse signal handlers that access attacker-controlled data for info leaks, UAFs, or race conditions.',
+    difficulty: 'Medium',
+    tactics: ['SIGALRM Leak', 'Async UAF', 'Race Condition'],
+    relatedTechniques: ['uaf', 'format-leak']
+  },
+
+  // ─── KERNEL TECHNIQUES ───
+  'kernel-rce': {
+    title: 'Kernel RCE',
+    description: 'Arbitrary code execution in kernel space (ring 0) via kernel ROP or function pointer hijack.',
+    difficulty: 'Expert',
+    tactics: ['Kernel ROP', 'commit_creds', 'SMEP Bypass'],
+    relatedTechniques: ['ebpf-exploit', 'modprobe-path']
+  },
+  'msg-msg-corruption': {
+    title: 'msg_msg Struct Corruption',
+    description: 'Corrupt kernel msg_msg size/pointers to achieve arbitrary read/write in kernel heap.',
+    difficulty: 'Expert',
+    tactics: ['Kernel Heap Overflow', 'msg_msg Size Corruption', 'Kernel UAF'],
+    relatedTechniques: ['kernel-rce', 'userfaultfd-exploit']
+  },
+  'userfaultfd-exploit': {
+    title: 'userfaultfd Exploitation',
+    description: 'Pause kernel execution during copy_from_user to widen race condition windows infinitely.',
+    difficulty: 'Expert',
+    tactics: ['Race Window Expansion', 'TOCTOU', 'Kernel Pause'],
+    relatedTechniques: ['kernel-rce', 'msg-msg-corruption']
+  },
+  'dirty-cow': {
+    title: 'Dirty COW (CVE-2016-5195)',
+    description: 'Race condition in COW memory management: write to read-only files via /proc/self/mem.',
+    difficulty: 'Medium',
+    tactics: ['COW Race', 'Read-Only File Write', 'Privilege Escalation'],
+    relatedTechniques: ['kernel-priv-esc']
+  },
+  'ipc-exploit': {
+    title: 'IPC Vulnerability',
+    description: 'Exploit inter-process communication to send malicious messages between processes.',
+    difficulty: 'Hard',
+    tactics: ['IPC Abuse', 'Message Injection', 'Broker Exploitation'],
+    relatedTechniques: ['mojo-exploit']
+  },
+  'mojo-exploit': {
+    title: 'Mojo/IPC RCE',
+    description: 'Exploit Mojo IPC framework in browsers/containers for type confusion and RCE.',
+    difficulty: 'Expert',
+    tactics: ['Mojo Interface Abuse', 'Type Confusion', 'Sandbox Escape'],
+    relatedTechniques: ['ipc-exploit']
+  },
+  'capability-abuse': {
+    title: 'Capability Abuse',
+    description: 'Misuse Linux capabilities (CAP_SYS_ADMIN, etc.) for privilege escalation.',
+    difficulty: 'Medium',
+    tactics: ['Capability Misconfiguration', 'Privilege Escalation'],
+    relatedTechniques: ['kernel-priv-esc']
+  },
+
   // how2heap new tooltips
   'unsafe-unlink': {
     title: 'Unsafe Unlink',

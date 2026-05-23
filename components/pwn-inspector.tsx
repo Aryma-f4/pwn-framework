@@ -114,7 +114,7 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
           const kb = getTechniqueKB(selectedNode.id);
           defaultChecklist.push(...kb.operatorChecklist.map((text: string, idx: number) => ({
             id: `item_${idx}`,
-            text: text.substring(5).trim(),
+            text: text.startsWith('[ ] ') ? text.substring(4).trim() : text.trim(),
             completed: false,
           })));
         }
@@ -132,6 +132,38 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
     if (!selectedNode) return [];
     return getNextStepsForNode(selectedNode);
   }, [selectedNode]);
+
+  const kbEntry = selectedNode ? getTechniqueKB(selectedNode.id) : undefined;
+  const hasKB = selectedNode ? !!kbEntry : false;
+
+  // Compute visible tabs — hide empty sections
+  const tabs = useMemo<TabType[]>(() => {
+    if (!selectedNode || selectedNode.id === 'root') return ['overview'];
+    if (hasKB && kbEntry) {
+      const visible: TabType[] = ['overview'];
+      if (kbEntry.preconditions && (kbEntry.preconditions.required.length > 0 || kbEntry.preconditions.detectionSteps.length > 0)) visible.push('precond');
+      if (kbEntry.exploitationPaths && kbEntry.exploitationPaths.length > 0) visible.push('exploits');
+      if (kbEntry.operatorChecklist && kbEntry.operatorChecklist.length > 0) visible.push('checklist');
+      if (kbEntry.references && kbEntry.references.length > 0) visible.push('refs');
+      if (getHeapReferenceForTechnique(selectedNode.id)) visible.push('heap');
+      const hasResources = (kbEntry.exploitationPaths && kbEntry.exploitationPaths.some(p => p.tools && p.tools.length > 0)) || (kbEntry.references && kbEntry.references.length > 0);
+      if (hasResources) visible.push('resources');
+      visible.push('sessions');
+      visible.push('recon');
+      return visible;
+    }
+    const visible: TabType[] = ['overview'];
+    if (selectedNode.prerequisites && selectedNode.prerequisites.length > 0) visible.push('prerequisites');
+    if (selectedNode.constraints && selectedNode.constraints.length > 0) visible.push('constraints');
+    if (selectedNode.blueprint && selectedNode.blueprint.trim().length > 0 && selectedNode.blueprint !== selectedNode.description) visible.push('blueprint');
+    if (getHeapReferenceForTechnique(selectedNode.id)) visible.push('heap');
+    visible.push('sessions');
+    visible.push('recon');
+    return visible;
+  }, [hasKB, kbEntry, selectedNode]);
+
+  // If activeTab was filtered out, fall back to overview
+  const effectiveTab: TabType = tabs.includes(activeTab) ? activeTab : 'overview';
 
   const handleNextStepClick = (stepId?: string) => {
     if (stepId && onSelectTechniqueById) {
@@ -157,8 +189,6 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
     );
   }
 
-  const kbEntry = getTechniqueKB(selectedNode.id);
-  const hasKB = !!kbEntry;
   const difficultyBadge = getDifficultyBadge(selectedNode.category, hasKB);
   const phase = CATEGORY_PHASE_MAP[selectedNode.category] || 'recon';
   const phaseTag = getPhaseTag(phase);
@@ -187,7 +217,7 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
 
   const renderTabContent = () => {
     if (hasKB && kbEntry) {
-      switch (activeTab) {
+      switch (effectiveTab) {
         case 'overview':
           return (
             <div className="pwn-section space-y-4">
@@ -373,14 +403,6 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
                       };
                       setChecklist(activeSession.id, [...activeSession.checklist, newItem]);
                     }}
-                    onItemDelete={(itemId) => {
-                      setChecklist(activeSession.id, activeSession.checklist.filter(item => item.id !== itemId));
-                    }}
-                    onItemUpdate={(itemId, text) => {
-                      setChecklist(activeSession.id, activeSession.checklist.map(item =>
-                        item.id === itemId ? { ...item, text } : item
-                      ));
-                    }}
                   />
                 )}
               </div>
@@ -537,7 +559,7 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
           return null;
       }
     } else {
-      switch (activeTab) {
+      switch (effectiveTab) {
         case 'overview':
           return (
             <div className="pwn-section space-y-4">
@@ -672,10 +694,6 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
     }
   };
 
-  const tabs = hasKB
-    ? (['overview', 'precond', 'exploits', 'checklist', 'refs', 'heap', 'resources', 'sessions', 'recon'] as TabType[])
-    : (['overview', 'prerequisites', 'constraints', 'blueprint', 'heap', 'resources', 'sessions', 'recon'] as TabType[]);
-
   const tabLabels: Record<TabType, string> = {
     overview: 'Overview',
     prerequisites: 'Prereqs',
@@ -720,7 +738,7 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`pwn-inspector-tab ${activeTab === tab ? 'active' : ''}`}
+            className={`pwn-inspector-tab ${effectiveTab === tab ? 'active' : ''}`}
             title={tabLabels[tab]}
           >
             <span className="opacity-70">{TAB_ICONS[tab]}</span>

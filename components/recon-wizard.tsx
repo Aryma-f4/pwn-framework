@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, Copy, Check, Terminal } from 'lucide-react';
-import { RECON_STEPS, RECON_CATEGORIES, ReconStep } from '@/lib/pwn-recon-data';
+import { ChevronDown, ChevronRight, Copy, Check, Terminal, Sparkles, X } from 'lucide-react';
+import { RECON_STEPS, RECON_CATEGORIES, ReconStep, generateAIPrompt } from '@/lib/pwn-recon-data';
 
 interface ReconWizardProps {
   selectedTags: Set<string>;
@@ -12,6 +12,22 @@ interface ReconWizardProps {
 export function ReconWizard({ selectedTags, onTagsChange }: ReconWizardProps) {
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set(['file-type']));
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [copiedPrompt, setCopiedPrompt] = useState(false);
+
+  const generatedPrompt = selectedTags.size > 0 ? generateAIPrompt(selectedTags) : '';
+
+  const basicStepsCompleted = RECON_STEPS
+    .filter(s => s.category === 'basic')
+    .filter(s => s.options.some(o => o.tags.every(t => selectedTags.has(t)))).length;
+  const totalBasicSteps = RECON_STEPS.filter(s => s.category === 'basic').length;
+  const canGeneratePrompt = basicStepsCompleted === totalBasicSteps;
+
+  const handleCopyPrompt = () => {
+    navigator.clipboard.writeText(generatedPrompt);
+    setCopiedPrompt(true);
+    setTimeout(() => setCopiedPrompt(false), 2000);
+  };
 
   const toggleStep = (stepId: string) => {
     const next = new Set(expandedSteps);
@@ -176,6 +192,54 @@ export function ReconWizard({ selectedTags, onTagsChange }: ReconWizardProps) {
         >
           Reset All Selections
         </button>
+      )}
+
+      {/* Generate Prompt for AI */}
+      {canGeneratePrompt && (
+        <button
+          onClick={() => setShowPrompt(true)}
+          className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-gradient-to-r from-violet-600/80 to-cyan-600/80 hover:from-violet-500 hover:to-cyan-500 text-white text-sm font-semibold transition-all border border-violet-500/30 hover:border-violet-400/50 hover:shadow-[0_0_20px_rgba(139,92,246,0.2)]"
+        >
+          <Sparkles size={16} />
+          Generate Prompt for AI
+        </button>
+      )}
+      {!canGeneratePrompt && selectedTags.size > 0 && (
+        <div className="text-xs text-gray-600 text-center py-1">
+          Complete all Basic Information steps ({basicStepsCompleted}/{totalBasicSteps}) to generate AI prompt
+        </div>
+      )}
+
+      {/* Prompt Display Overlay */}
+      {showPrompt && generatedPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowPrompt(false)}>
+          <div className="w-full max-w-2xl max-h-[80vh] mx-4 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Sparkles size={16} className="text-violet-400" />
+                <span className="text-sm font-semibold text-gray-200">Generated AI Prompt</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleCopyPrompt}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-cyan-600/20 text-cyan-300 border border-cyan-500/30 rounded-md hover:bg-cyan-600/30 transition-colors"
+                >
+                  {copiedPrompt ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                  {copiedPrompt ? 'Copied!' : 'Copy'}
+                </button>
+                <button
+                  onClick={() => setShowPrompt(false)}
+                  className="p-1.5 text-gray-500 hover:text-gray-300 transition-colors"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">
+              <pre className="whitespace-pre-wrap text-sm text-gray-300 leading-relaxed font-mono">{generatedPrompt}</pre>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

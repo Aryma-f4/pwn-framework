@@ -414,7 +414,72 @@ const EXPLOIT_RULES: ExploitRule[] = [
 
   // ── NEW RULES ──
 
-  // Off-by-One
+  // Signal Handler Exploit
+  {
+    name: 'Signal Handler Leak (SIGALRM)',
+    techniqueId: 'signal_handler_exploit',
+    requiredTags: ['stack-bof'],
+    boostTags: ['network', 'no-canary'],
+    excludeTags: [],
+    baseConfidence: 'medium',
+    reason: 'Signal handler leaks canary/libc on crash or alarm → bypass ASLR and canary',
+    requiredLeaks: [],
+    suggestedTools: ['ltrace', 'strace', 'pwntools'],
+  },
+
+  // House of Lore
+  {
+    name: 'House of Lore → Arbitrary Alloc',
+    techniqueId: 'house_of_lore',
+    requiredTags: ['heap-vuln'],
+    boostTags: ['arb-write', 'info-leak'],
+    excludeTags: ['glibc-new', 'glibc-latest'],
+    baseConfidence: 'medium',
+    reason: 'Corrupt smallbin bk → fake chunk → malloc returns arbitrary address (glibc < 2.29 easiest)',
+    requiredLeaks: ['heap address'],
+    suggestedTools: ['pwndbg bins', 'pwntools'],
+  },
+
+  // Overlapping Chunks
+  {
+    name: 'Overlapping Chunks → Tcache Poison',
+    techniqueId: 'overlapping_chunks',
+    requiredTags: ['heap-vuln', 'heap-overflow'],
+    boostTags: ['arb-write', 'info-leak'],
+    excludeTags: [],
+    baseConfidence: 'high',
+    reason: 'Size corruption creates overlapping allocations → tcache/LIBC leak → arbitrary write',
+    requiredLeaks: ['heap address'],
+    suggestedTools: ['pwndbg vis_heap_chunks', 'pwntools'],
+  },
+
+  // RELRO Bypass via Hooks
+  {
+    name: 'Full RELRO Bypass (__malloc_hook)',
+    techniqueId: 'buffer_overflow',
+    requiredTags: ['stack-bof', 'full-relro'],
+    boostTags: ['info-leak', 'rip-control'],
+    excludeTags: ['glibc-latest'],
+    baseConfidence: 'medium',
+    reason: 'Full RELRO blocks GOT → overwrite __malloc_hook/__free_hook instead (glibc < 2.34)',
+    requiredLeaks: ['libc base'],
+    suggestedTools: ['one_gadget', 'pwntools', 'pwndbg'],
+  },
+
+  // Canary Bruteforce
+  {
+    name: 'Canary Bruteforce (Forking Server)',
+    techniqueId: 'buffer_overflow',
+    requiredTags: ['stack-bof', 'canary', 'network'],
+    boostTags: ['no-pie'],
+    excludeTags: ['no-canary'],
+    baseConfidence: 'medium',
+    reason: 'Forking server with canary → brute force canary byte-by-byte (8 connections × 256)',
+    requiredLeaks: [],
+    suggestedTools: ['pwntools', 'custom brute script'],
+  },
+
+  // Off-by-One specific
   {
     name: 'Off-by-One → Heap Coalescing (Einherjar)',
     techniqueId: 'off_by_one',
@@ -647,3 +712,111 @@ export const RECON_CATEGORIES = {
   analysis: { label: 'Vulnerability Analysis', icon: '🔍', color: '#f97316' },
   runtime: { label: 'Runtime Environment', icon: '⚡', color: '#10b981' },
 } as const;
+
+// ─── AI PROMPT GENERATOR ───
+
+function getSelectedLabel(stepId: string, tags: Set<string>): string | null {
+  const step = RECON_STEPS.find(s => s.id === stepId);
+  if (!step) return null;
+  const option = step.options.find(o => o.tags.every(t => tags.has(t)));
+  return option ? option.label : null;
+}
+
+function getSelectedDescription(stepId: string, tags: Set<string>): string | null {
+  const step = RECON_STEPS.find(s => s.id === stepId);
+  if (!step) return null;
+  const option = step.options.find(o => o.tags.every(t => tags.has(t)));
+  return option ? option.description : null;
+}
+
+export function generateAIPrompt(tags: Set<string>): string {
+  if (tags.size === 0) return '';
+
+  const sections: string[] = [];
+  const recommendations = getExploitRecommendations(tags);
+
+  // ── Basic Information ──
+  const arch = getSelectedLabel('file-type', tags);
+  const linkType = tags.has('static') ? 'Statically linked' : tags.has('dynamic') ? 'Dynamically linked' : null;
+  const symbols = getSelectedLabel('symbols', tags);
+  const libcVer = getSelectedLabel('libc-version', tags);
+
+  if (arch || linkType || symbols || libcVer) {
+    const parts: string[] = [];
+    if (arch) parts.push(`Architecture: ${arch}${linkType ? `, ${linkType}` : ''}`);
+    else if (linkType) parts.push(linkType);
+    if (symbols) parts.push(`Symbols: ${symbols}`);
+    if (libcVer) parts.push(`Libc: ${libcVer}`);
+    sections.push(`**Binary Info:** ${parts.join('; ')}`);
+  }
+
+  // ── Protections ──
+  const canary = getSelectedLabel('canary', tags);
+  const nx = getSelectedLabel('nx', tags);
+  const pie = getSelectedLabel('pie', tags);
+  const relro = getSelectedLabel('relro', tags);
+
+  const protParts: string[] = [];
+  if (canary) protParts.push(canary);
+  if (nx) protParts.push(nx);
+  if (pie) protParts.push(pie);
+  if (relro) protParts.push(relro);
+  if (protParts.length > 0) {
+    sections.push(`**Protections:** ${protParts.join(', ')}`);
+  }
+
+  // ── Vulnerability ──
+  const vulnType = getSelectedLabel('vuln-type', tags);
+  const inputVector = getSelectedLabel('input-vector', tags);
+  const vulnParts: string[] = [];
+  if (vulnType) vulnParts.push(vulnType);
+  if (inputVector) vulnParts.push(`Input: ${inputVector}`);
+  if (vulnParts.length > 0) {
+    sections.push(`**Vulnerability:** ${vulnParts.join(', ')}`);
+  }
+
+  // ── Runtime ──
+  const aslr = getSelectedLabel('aslr', tags);
+  const seccomp = getSelectedLabel('seccomp', tags);
+  const runtimeParts: string[] = [];
+  if (aslr) runtimeParts.push(aslr);
+  if (seccomp) runtimeParts.push(seccomp);
+  if (runtimeParts.length > 0) {
+    sections.push(`**Runtime:** ${runtimeParts.join(', ')}`);
+  }
+
+  // ── Primitives ──
+  const primitives: string[] = [];
+  if (tags.has('arb-read')) primitives.push('Arbitrary Read');
+  if (tags.has('arb-write')) primitives.push('Arbitrary Write');
+  if (tags.has('info-leak')) primitives.push('Info Leak');
+  if (tags.has('rip-control')) primitives.push('RIP/EIP Control');
+  if (primitives.length > 0) {
+    sections.push(`**Primitives:** ${primitives.join(', ')}`);
+  }
+
+  // ── Recommended Exploits ──
+  let exploitSection = '';
+  if (recommendations.length > 0) {
+    const topRecs = recommendations.slice(0, 5);
+    const recLines = topRecs.map(r => {
+      const confLabel = r.confidence === 'high' ? '🟢 HIGH' : r.confidence === 'medium' ? '🟡 MED' : '🔴 LOW';
+      return `- ${r.name} (${confLabel}): ${r.reason}`;
+    });
+    exploitSection = `\n**Recommended Exploit Paths:**\n${recLines.join('\n')}`;
+
+    if (recommendations.some(r => r.requiredLeaks.length > 0)) {
+      const leaks = [...new Set(recommendations.flatMap(r => r.requiredLeaks))].slice(0, 5);
+      exploitSection += `\n\n**Required Leaks:** ${leaks.join(', ')}`;
+    }
+
+    const tools = [...new Set(recommendations.flatMap(r => r.suggestedTools))].slice(0, 6);
+    if (tools.length > 0) {
+      exploitSection += `\n\n**Suggested Tools:** ${tools.join(', ')}`;
+    }
+  }
+
+  const prompt = `I have a binary exploitation challenge with the following characteristics:\n\n${sections.join('\n')}${exploitSection}\n\nBased on this information, provide a step-by-step exploitation strategy with specific techniques, required offsets/leaks, and pwntools Python skeleton code to achieve a shell${tags.has('seccomp') ? ' (or read the flag via ORW if execve is blocked)' : ''}. Explain the key exploitation stages and potential pitfalls.`;
+
+  return prompt;
+}

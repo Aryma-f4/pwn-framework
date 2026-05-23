@@ -721,7 +721,7 @@ continue
     prerequisites: ['Heap overflow', 'Allocator implementation knowledge'],
     constraints: ['Heap layout control', 'Metadata accessible'],
     blueprint: 'heap_exploit() {\n  corrupt_heap_metadata();\n  trigger_allocator_vuln();\n  achieve_code_exec();\n}',
-    children: ['use_after_free', 'double_free', 'house_of_botcake', 'house_of_rabbit', 'house_of_roman', 'tcache_stashing', 'house_of_force', 'house_of_spirit', 'house_of_einherjar', 'unsorted_bin_attack', 'large_bin_attack', 'first_fit', 'poison_null_byte', 'house_of_husk', 'house_of_corrosion', 'house_of_apple', 'house_of_cat'],
+    children: ['use_after_free', 'double_free', 'house_of_botcake', 'house_of_rabbit', 'house_of_roman', 'house_of_lore', 'tcache_stashing', 'house_of_force', 'house_of_spirit', 'house_of_einherjar', 'unsorted_bin_attack', 'large_bin_attack', 'first_fit', 'poison_null_byte', 'house_of_husk', 'house_of_corrosion', 'house_of_apple', 'house_of_cat', 'overlapping_chunks', 'signal_handler_exploit'],
   },
 
   use_after_free: {
@@ -911,6 +911,87 @@ continue
     constraints: ['Requires 12-bit brute force (1/4096 success rate)'],
     blueprint: 'roman() {\n  overwrite_lsb_fd();\n  unsorted_bin_attack_lsb();\n}',
     children: ['heap_control'],
+  },
+
+  house_of_lore: {
+    id: 'house_of_lore',
+    name: 'House of Lore',
+    category: 'technique',
+    stack: [],
+    format: [],
+    heap: ['heap-based'],
+    sandbox: [],
+    description: 'Corrupts the smallbin free list by manipulating the bk pointer of a freed chunk, causing malloc to return an arbitrary address. The attacker forges a fake chunk in the target region and links it into the smallbin via bk pointer corruption.',
+    prerequisites: ['Ability to corrupt a smallbin chunk bk pointer', 'Smallbin must have chunks (not all in fastbin/tcache)', 'Fake chunk must have valid size field at fake+8'],
+    constraints: ['Requires smallbin to be used (chunks > fastbin size)', 'Glibc < 2.29 has fewer checks on smallbin', 'Glibc 2.29+ validates victim->bk->fd == victim'],
+    blueprint: `house_of_lore() {
+  // Step 1: Ensure victim is in smallbin
+  free(large_chunk);  // Goes to unsorted bin, then smallbin
+  
+  // Step 2: Corrupt victim->bk to point to fake chunk
+  victim->bk = &fake_chunk - 0x10;  // fake_chunk->fd must point to victim
+  
+  // Step 3: malloc() walks smallbin, finds victim
+  //          then victim->bk->fd == victim (check passes!)
+  //          Returns fake_chunk address
+  ptr = malloc(size);  // Returns fake_chunk address!
+}`,
+    children: ['heap_control'],
+  },
+
+  overlapping_chunks: {
+    id: 'overlapping_chunks',
+    name: 'Overlapping Chunks',
+    category: 'technique',
+    stack: [],
+    format: [],
+    heap: ['heap-based'],
+    sandbox: [],
+    description: 'Corrupts chunk metadata (size field) so two malloc allocations overlap the same memory region. Enables reading/writing data from one allocation through another — powerful for tcache poisoning, libc leaks, and arbitrary writes.',
+    prerequisites: ['Heap overflow to corrupt a chunk size field', 'Ability to allocate/free chunks before and after the corruption'],
+    constraints: ['Must satisfy size alignment checks (0x10-aligned)', 'Next chunk prev_size must be consistent for free()', 'Glibc 2.29+ adds more validation checks'],
+    blueprint: `overlapping_chunks() {
+  // Step 1: Allocate A, B, C (adjacent)
+  A = malloc(0x18); B = malloc(0x18); C = malloc(0x18);
+  
+  // Step 2: Overflow A into B's size field
+  B->size = 0x41;  // Enlarge B to encompass C
+  
+  // Step 3: Free B — adds to fastbin/tcache as size 0x40
+  free(B);
+  
+  // Step 4: malloc(0x30) returns B region
+  // But C is still alive inside B's range!
+  // Read/Write through C overlaps with B's new allocation
+  D = malloc(0x30);  // D == B's address, overlaps C
+}`,
+    children: ['heap_control'],
+  },
+
+  signal_handler_exploit: {
+    id: 'signal_handler_exploit',
+    name: 'Signal Handler Exploitation',
+    category: 'technique',
+    stack: ['stack-based'],
+    format: [],
+    heap: [],
+    sandbox: [],
+    description: 'Abusing signal handlers (SIGALRM, SIGSEGV, etc.) that execute user-controllable code in an async context. Common in CTF: alarm() triggers SIGALRM handler that prints data, or a crash handler that leaks memory — enabling info disclosure or even code execution.',
+    prerequisites: ['Binary installs a signal handler (signal() / sigaction())', 'Handler uses global/heap data that attacker can influence'],
+    constraints: ['Handler must be reachable', 'Race conditions may limit reliability'],
+    blueprint: `signal_handler_exploit() {
+  // Common CTF patterns:
+  // 1. alarm(1) + SIGALRM handler prints flag → just wait
+  // 2. SIGSEGV handler that calls puts(ptr) → leak via crash
+  // 3. Handler calls free(global) + UAF later → race window
+  // 4. Handler calls write(1, buf, len) with attacker-controlled buf/len
+  
+  // Exploit: trigger signal, then corrupt data handler reads
+  signal(SIGALRM, handler);
+  alarm(1);
+  while(1) { corrupt_shared_data(); }
+}`,
+    children: [],
   },
 
   tcache_stashing: {

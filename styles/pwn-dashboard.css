@@ -1265,9 +1265,8 @@
 }
 
 .exploit-view-btn:hover {
-  background: rgba(34, 211, 238, 0.12);
+  background: rgba(34, 211, 238, 0.1);
   border-color: rgba(34, 211, 238, 0.4);
-  box-shadow: var(--glow-cyan);
 }
 
 /* ===== SCROLLBAR GLOBAL ===== */

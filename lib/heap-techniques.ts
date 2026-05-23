@@ -635,7 +635,7 @@ void *target = malloc(0x100); // Gets target_address!`
       }
     ],
     how2heapLink: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.31/house_of_botcake.c',
-    dhavalkapilChapter: '',
+    dhavalkapilChapter: 'https://heap-exploitation.dhavalkapil.com/diving_into_glibc_heap/heap_corruption.html',
     ctfChallenges: [
       { name: 'Deconstruct.f CTF 2021', year: '2021', link: '' }
     ],
@@ -680,7 +680,7 @@ void *target = malloc(0x100); // Gets target_address!`
       }
     ],
     how2heapLink: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.23/house_of_roman.c',
-    dhavalkapilChapter: 'https://heap-exploitation.dhavalkapil.com/heap_exploitation/house_of_roman',
+    dhavalkapilChapter: 'https://heap-exploitation.dhavalkapil.com/diving_into_glibc_heap/bin_exploitation.html',
     ctfChallenges: [
       { name: 'Codegate CTF 2018: BaskinRobbins31', year: '2018', link: '' }
     ],
@@ -831,7 +831,7 @@ void *overlap = malloc(0xf0);
       }
     ],
     how2heapLink: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.29/overlapping_chunks_2.c',
-    dhavalkapilChapter: '',
+    dhavalkapilChapter: 'https://heap-exploitation.dhavalkapil.com/diving_into_glibc_heap/heap_corruption.html',
     ctfChallenges: [
       { name: 'HITCON 2019: One Punch Man', year: '2019', link: 'https://ctftime.org' }
     ],

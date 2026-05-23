@@ -10,6 +10,9 @@ import { PwnInspector } from '@/components/pwn-inspector';
 import { KeyboardHelpModal } from '@/components/keyboard-help-modal';
 import { WelcomeModal } from '@/components/exploit-workflow';
 import { ResizablePanel } from '@/components/resizable-panel';
+import { ErrorBoundary } from '@/components/error-boundary';
+import { storage } from '@/lib/storage';
+import { logger } from '@/lib/logger';
 import '@/styles/pwn-dashboard.css';
 
 export default function PwnExploitationDashboard() {
@@ -18,7 +21,14 @@ export default function PwnExploitationDashboard() {
   const [pathHighlight, setPathHighlight] = useState<Set<string>>(new Set());
   const [activeFilter, setActiveFilter] = useState<FilterType | null>(null);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
-  const [showWelcome, setShowWelcome] = useState(true);
+  const [showWelcome, setShowWelcome] = useState(() => {
+    // Only show welcome on first visit using storage utility
+    if (typeof window !== 'undefined') {
+      const hasVisited = storage.get('pwn_welcomed');
+      return !hasVisited;
+    }
+    return false;
+  });
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [pinnedTechniques, setPinnedTechniques] = useState<Set<string>>(new Set());
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -29,6 +39,7 @@ export default function PwnExploitationDashboard() {
   const [completedPhases, setCompletedPhases] = useState<Set<string>>(new Set());
 
   useEffect(() => {
+    logger.info('PWN Framework dashboard initialized');
     const mediaQuery = window.matchMedia('(max-width: 768px)');
     const handleChange = (e: MediaQueryListEvent | MediaQueryList) => {
       setIsMobile(e.matches);
@@ -246,10 +257,11 @@ export default function PwnExploitationDashboard() {
   }, [reconTags]);
 
   return (
-    <>
-      <WelcomeModal isOpen={showWelcome} onClose={() => setShowWelcome(false)} onStartRecon={handleStartReconFromWelcome} />
-      <KeyboardHelpModal isOpen={showKeyboardHelp} onClose={() => setShowKeyboardHelp(false)} />
-      <div className="pwn-container">
+    <ErrorBoundary>
+      <>
+        <WelcomeModal isOpen={showWelcome} onClose={() => setShowWelcome(false)} onStartRecon={handleStartReconFromWelcome} />
+        <KeyboardHelpModal isOpen={showKeyboardHelp} onClose={() => setShowKeyboardHelp(false)} />
+        <div className="pwn-container">
         {/* Header */}
         <header className="pwn-header">
           <div className="flex items-center gap-3">
@@ -394,7 +406,8 @@ export default function PwnExploitationDashboard() {
             Data Source: Master Binary Exploitation Decision &amp; Knowledge Matrix v5.0 + how2heap
           </div>
         </div>
-      </div>
-    </>
+        </div>
+      </>
+    </ErrorBoundary>
   );
 }
