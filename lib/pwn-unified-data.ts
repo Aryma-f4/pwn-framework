@@ -149,6 +149,21 @@ export const KB_MAPPING: Record<string, TechniqueDetails | undefined> = {
   'heap_overflow': PWN_KNOWLEDGE_BASE['heap_buffer_overflow'],
   'tcache_poison': PWN_KNOWLEDGE_BASE['heap_buffer_overflow'],
 
+  // ─── NEW TECHNIQUES ───
+  'one_gadget': PWN_KNOWLEDGE_BASE['one_gadget'],
+  'cop_call_oriented_programming': PWN_KNOWLEDGE_BASE['cop_call_oriented_programming'],
+  'cross_cache_attack': PWN_KNOWLEDGE_BASE['cross_cache_attack'],
+  'house_of_blind_v2': PWN_KNOWLEDGE_BASE['house_of_blind_v2'],
+  'v8_type_confusion': PWN_KNOWLEDGE_BASE['v8_type_confusion'],
+  'dom_clobbering': PWN_KNOWLEDGE_BASE['dom_clobbering'],
+  'prototype_pollution': PWN_KNOWLEDGE_BASE['prototype_pollution'],
+  'ret2dir': PWN_KNOWLEDGE_BASE['ret2dir'],
+  'dirty_pagetable': PWN_KNOWLEDGE_BASE['dirty_pagetable'],
+  'slub_allocator_exploit': PWN_KNOWLEDGE_BASE['slub_allocator_exploit'],
+  'kernel_cross_cache_attack': PWN_KNOWLEDGE_BASE['kernel_cross_cache_attack'],
+  'cfi_bypass': PWN_KNOWLEDGE_BASE['cfi_bypass'],
+  'pac_bypass_arm': PWN_KNOWLEDGE_BASE['pac_bypass_arm'],
+
   // ─── SETUP TOOLS ───
   'setup_gdb': PWN_KNOWLEDGE_BASE['setup_gdb'],
   'setup_pwntools': PWN_KNOWLEDGE_BASE['setup_pwntools'],

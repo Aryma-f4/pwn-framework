@@ -6899,6 +6899,1005 @@ p = malloc(0x20000)  # triggers mmap → thread arena
     references: [
       { description: 'Heap Exploitation: House of Mind' }
     ]
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // STACK EXPLOITATION PRIMITIVES
+  // ─────────────────────────────────────────────────────────
+
+  one_gadget: {
+    id: 'one_gadget',
+    name: 'One-Gadget',
+    category: 'technique',
+    class: 'stack-primitive',
+    description: 'A single gadget in libc that gives code execution with a specific register state (usually rdi or rdx controllable). Not a full ROP chain - just one address that works when certain constraints are met. Extremely common in CTF heap exploitation where you only need to satisfy the gadget\'s register requirements to spawn a shell.',
+    preconditions: {
+      summary: 'Finding a one-gadget address and understanding its constraints (which registers must be NULL/point to /bin/sh, etc).',
+      required: [
+        'Libc leak to locate libc base',
+        'One-gadget address (from libc via objdump/one_gadget tool)',
+        'Understanding of gadget constraints (register states needed)',
+        'Ability to set registers to required values (via ROP or heap layout)'
+      ],
+      detectionSteps: [
+        'Find one-gadgets: one_gadget /lib/libc.so.6',
+        'Test each gadget with different register states in GDB',
+        'Identify which gadget constraints can be satisfied',
+        'Set up state (ROP chain or heap Feng Shui) to meet constraints'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Direct One-Gadget via Controlled Registers',
+        description: 'Use one-gadget with minimal setup when heap/libc layout naturally satisfies its constraints.',
+        steps: [
+          'Find one-gadget address in libc',
+          'Determine which registers need what values for gadget to work',
+          'If constraints naturally met (e.g., rdi points to "/bin/sh" in memory)',
+          'Redirect execution to one-gadget (via hook overwrite, vtable, etc)',
+          'Shell spawned with gadget constraints satisfied'
+        ],
+        tools: ['one_gadget', 'pwntools', 'pwndbg'],
+        codeSnippet: `# One-gadget constraints example
+# Gadget at libc + offset requires: [rdi] = pointer to "/bin/sh", [rsi] = NULL, [rdx] = NULL
+
+# If heap layout gives us rdi pointing to "/bin/sh" automatically
+# Just redirect execution without additional ROP
+*(uint64_t*)(target) = one_gadget_addr
+free(poisoned_chunk)  # triggers execution`,
+        applicableLibc: 'All (tool-specific)',
+        references: [
+          { description: 'one_gadget tool', url: 'https://github.com/david942j/one_gadget' }
+        ]
+      },
+      {
+        name: 'One-Gadget with ROP Setup',
+        description: 'Use small ROP chain to satisfy gadget constraints before jumping to one-gadget.',
+        steps: [
+          'Find one-gadget with known constraints',
+          'Build minimal ROP to set required registers',
+          'ROP sets rdi = pointer to "/bin/sh", rsi/rds = 0',
+          'Jump to one-gadget with constraints satisfied'
+        ],
+        tools: ['one_gadget', 'ROPgadget', 'pwntools'],
+        codeSnippet: `# One-gadget with minimal ROP
+one_gadget = libc_base + 0x4f2a5  # requires rdi = "/bin/sh", rsi = rdx = 0
+
+# Minimal ROP to satisfy constraints
+rop = ROP(libc)
+rop.raw(pop_rdi_addr)      # set rdi
+rop.raw(binsh_addr)         # rdi = "/bin/sh"
+rop.raw(pop_rsi_rdx_addr)  # set rsi, rdx  
+rop.raw(0)                 # rsi = 0
+rop.raw(0)                 # rdx = 0
+rop.raw(one_gadget)        # jump
+
+# Overwrite hook with rop chain
+*(uint64_t*)(__free_hook) = rop.chain()`,
+        applicableLibc: 'All',
+        references: [
+          { description: 'One-Gadget: Finding the one', url: 'https://github.com/david942j/one_gadget' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['One-gadget constraints satisfied', 'Shell spawned'],
+      artifacts: ['GDB: execution at one-gadget with correct register state']
+    },
+    operatorChecklist: [
+      '[ ] Find one-gadgets: one_gadget /lib/libc.so.6',
+      '[ ] Test each gadget in GDB to find one with satisfiable constraints',
+      '[ ] Set up register state via ROP or heap layout',
+      '[ ] Redirect execution to one-gadget',
+      '[ ] Verify shell spawned'
+    ],
+    vulnerabilityTypes: ['stack', 'rop', 'libc', 'one-gadget'],
+    references: [
+      { description: 'one_gadget tool', url: 'https://github.com/david942j/one_gadget' }
+    ]
+  },
+
+  cop_call_oriented_programming: {
+    id: 'cop_call_oriented_programming',
+    name: 'COP (Call-Oriented Programming)',
+    category: 'technique',
+    class: 'stack-primitive',
+    description: 'Alternative to ROP when JOP (Jump-Oriented Programming) or COP is needed to bypass CFI. Uses call gadgets instead of return gadgets. Attackers construct exploits using indirect call instructions rather than returns, exploiting the fact that CFI may allow calls to valid function pointers while returns are more strictly controlled.',
+    preconditions: {
+      summary: 'Binary with CFI or other mitigations that block return-oriented techniques but have exploitable call sites.',
+      required: [
+        'Ability to control call targets via function pointers',
+        'Knowledge of call gadget locations in binary/loaded libraries',
+        'CFI implementation that permits calls to valid-looking targets'
+      ],
+      detectionSteps: [
+        'Check for CFI or similar forward-edge protection',
+        'Identify indirect call sites that can be controlled',
+        'Find call gadgets (not return gadgets) in binary',
+        'Build chain of calls to achieve code execution'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Call Gadget Chain to Code Execution',
+        description: 'Construct exploit using sequence of call gadgets.',
+        steps: [
+          'Identify indirect call site (e.g., call [reg+offset])',
+          'Find call gadgets that set up desired state',
+          'Corrupt function pointer to point to first gadget',
+          'Chain gadget executions via controlled pointers',
+          'Achieve code execution without using returns'
+        ],
+        tools: ['ROPgadget', 'pwntools', 'objdump'],
+        codeSnippet: `# COP concept
+# Instead of return gadgets, use call gadgets
+# call eax → call [reg+offset] → etc
+
+# Identify gadget: call eax
+call_eax_gadget = binary_base + 0x1234  # call eax; ret
+
+# Control eax to point to next gadget
+# ... build chain of calls`,
+        applicableLibc: 'N/A (binary-specific)',
+        references: [
+          { description: 'COP - Call Oriented Programming', url: 'https://www.usenix.org/legacy/events/woot10/tech/full_papers/Criswell.pdf' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Call chain executed', 'Control flow hijacked via calls'],
+      artifacts: ['GDB: call gadgets executed in sequence']
+    },
+    operatorChecklist: [
+      '[ ] Check if CFI blocks return-oriented techniques',
+      '[ ] Identify indirect call sites',
+      '[ ] Find call gadgets (not return gadgets)',
+      '[ ] Build chain of calls to execute code',
+      '[ ] Verify bypass of CFI-like protections'
+    ],
+    vulnerabilityTypes: ['stack', 'cop', 'cfi-bypass', 'call-gadgets'],
+    references: [
+      { description: 'COP - Call Oriented Programming paper' }
+    ]
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // HEAP MODERN TECHNIQUES (glibc 2.38+)
+  // ─────────────────────────────────────────────────────────
+
+  cross_cache_attack: {
+    id: 'cross_cache_attack',
+    name: 'Cross-Cache Attack (Modern)',
+    category: 'technique',
+    class: 'heap-primitive',
+    description: 'Technique to manipulate cache timing between different size classes. By carefully allocating and freeing chunks across size boundaries, an attacker can influence which chunks get reused and corrupt metadata in unexpected ways. Particularly relevant for glibc 2.38+ where new mitigations make traditional techniques harder.',
+    preconditions: {
+      summary: 'Time-controlled allocations and ability to influence heap layout across size classes.',
+      required: [
+        'Ability to make allocations of different sizes',
+        'Timing control to influence cache state',
+        'Understanding of tcache/smallbin/largebin interactions',
+        'Glibc 2.38+ with newer mitigations'
+      ],
+      detectionSteps: [
+        'Map heap layout and identify cache states for different sizes',
+        'Use timing attacks or controlled allocations to cross cache boundaries',
+        'Trigger corruption across size class boundaries',
+        'Observe unexpected chunk reuse patterns'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Size-Class Cache Crossing',
+        description: 'Manipulate allocations to cross cache boundaries and corrupt metadata.',
+        steps: [
+          'Allocate chunks in multiple size classes',
+          'Free chunks to populate different caches',
+          'Use timing/heap feng shui to influence which cache serves next allocation',
+          'Cross boundary to corrupt metadata in adjacent cache',
+          'Achieve arbitrary write via cross-cache corruption'
+        ],
+        tools: ['pwndbg heap', 'pwntools'],
+        codeSnippet: `# Cross-cache attack concept
+# Manipulate cache boundaries to cross-fertilize corruption
+
+# Fill tcache for size 0x80
+for i in range(7):
+    p = malloc(0x80)
+    free(p)
+
+# Fill smallbin for same size
+# ...
+
+# Now allocate in way that crosses cache boundary
+# Use different size to trigger unexpected behavior`,
+        applicableLibc: '>= 2.38',
+        references: [
+          { description: 'Cross-Cache Attack research' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Metadata corruption crossed size boundaries', 'Unexpected chunk returned'],
+      artifacts: ['GDB: corrupted cache state']
+    },
+    operatorChecklist: [
+      '[ ] Map cache states for different size classes',
+      '[ ] Use timing/allocation patterns to cross boundaries',
+      '[ ] Observe unexpected cache behavior',
+      '[ ] Exploit cross-cache corruption for arbitrary write'
+    ],
+    vulnerabilityTypes: ['heap', 'modern', 'cross-cache', 'timing'],
+    references: [
+      { description: 'Cross-cache attack research' }
+    ]
+  },
+
+  house_of_blind_v2: {
+    id: 'house_of_blind_v2',
+    name: 'House of Blind v2 (glibc 2.38+)',
+    category: 'technique',
+    class: 'house',
+    description: 'Modern evolution of House of Blind for glibc 2.38+ where traditional hooks are removed. Uses alternative targets like stderr vtable, thread-local structures, or tcache metadata manipulation to achieve leakless code execution. New variants exploit changes in safe-linking and tcache behavior.',
+    preconditions: {
+      summary: 'Glibc 2.38+ with hooks removed, requiring alternative targets for execution hijacking.',
+      required: [
+        'Glibc >= 2.38 (hooks removed)',
+        'Heap overflow or UAF to corrupt alternative targets',
+        'Understanding of new safe-linking interactions',
+        'Knowledge of alternative execution vectors'
+      ],
+      detectionSteps: [
+        'Verify glibc version >= 2.38',
+        'Identify alternative targets: stderr vtable, tls, exit handlers',
+        'Determine which target is reachable from overflow/UAF',
+        'Apply leakless exploitation via alternative pointer'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'stderr Vtable Hijack (Leakless)',
+        description: 'Target stderr\'s _wide_data vtable pointer for execution hijacking.',
+        steps: [
+          'Identify stderr._wide_vtable at known offset from libc',
+          'Use partial overwrite to redirect vtable to controlled memory',
+          'Place one-gadget at controlled memory location',
+          'Trigger stdio operation to invoke vtable function',
+          'Execution redirected to one-gadget - shell obtained'
+        ],
+        tools: ['pwndbg', 'pwntools', 'one_gadget'],
+        codeSnippet: `# House of Blind v2: stderr vtable hijack
+# For glibc 2.38+ where __free_hook is gone
+
+# Partial overwrite of stderr._wide_vtable (low entropy: 1/65536)
+stderr_vtable_ptr = libc_base + stderr_offset + 0xf8  # _wide_vtable offset
+
+# Overwrite last 2-3 bytes to point to our controlled region
+partial_overwrite(stderr_vtable_ptr, controlled_addr & 0xFFFF)
+
+# Place one_gadget at controlled_addr
+*(uint64_t*)controlled_addr = one_gadget
+
+# Trigger via stdio function (e.g., fprintf, fflush)
+# _IO_wfile_jumps or similar will be invoked`,
+        applicableLibc: '>= 2.38',
+        references: [
+          { description: 'How2Heap: house_of_blind.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.38/house_of_blind.c' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['stderr vtable corrupted', 'Execution redirected to one-gadget'],
+      artifacts: ['GDB: corrupted vtable pointer', 'Shell spawned without full leak']
+    },
+    operatorChecklist: [
+      '[ ] Verify glibc 2.38+ (hooks removed)',
+      '[ ] Locate alternative target (stderr vtable, tls, etc)',
+      '[ ] Determine partial vs full overwrite feasibility',
+      '[ ] Place one-gadget at controlled address',
+      '[ ] Trigger target to redirect execution',
+      '[ ] Verify shell obtained'
+    ],
+    vulnerabilityTypes: ['heap', 'house', 'modern-glibc', 'leakless'],
+    references: [
+      { description: 'How2Heap: house_of_blind glibc 2.38' }
+    ]
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // BROWSER EXPLOITATION
+  // ─────────────────────────────────────────────────────────
+
+  v8_type_confusion: {
+    id: 'v8_type_confusion',
+    name: 'V8 Type Confusion',
+    category: 'technique',
+    class: 'browser',
+    description: 'V8 JavaScript engine vulnerability where type checking fails to distinguish between different object types, allowing an attacker to use an object as a different type. Often used to achieve arbitrary memory read/write and later code execution via WebAssembly or JIT spraying.',
+    preconditions: {
+      summary: 'JavaScript execution in V8-based browser or Node.js with ability to trigger type confusion.',
+      required: [
+        'JavaScript execution context (browser or Node.js)',
+        'V8 vulnerability allowing type confusion between object types',
+        'Ability to trigger vulnerable code path',
+        'Understanding of V8 memory layout for sandbox escape'
+      ],
+      detectionSteps: [
+        'Identify type confusion gadget in V8',
+        'Trigger confusion to get arbitrary read/write',
+        'Map V8 heap and internal structures',
+        'Corrupt objects to achieve code execution'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'TurboFan Type Confusion -> OOB Access',
+        description: 'Exploit V8 TurboFan optimization bug to achieve out-of-bounds memory access.',
+        steps: [
+          'Trigger JavaScript code that confuses TurboFan type analysis',
+          'Achieve out-of-bounds read/write on V8 heap',
+          'Use OOB to corrupt vtable or other critical structures',
+          'Achieve arbitrary code execution via corrupted function pointer'
+        ],
+        tools: ['d8 (V8 shell)', 'v8.log', 'pwntools'],
+        codeSnippet: `// V8 type confusion example (simplified)
+function opt(obj) {
+  // TurboFan assumes obj is integer, but we pass object
+  return obj.value;  // type confusion → arbitrary read
+}
+
+// Trigger optimization
+for (let i = 0; i < 10000; i++) opt({value: 1});
+
+// Use confusion for OOB access
+let fake = [1.1, 2.2, 3.3];
+opt(fake);  // reads out of bounds`,
+        applicableLibc: 'N/A (browser-specific)',
+        references: [
+          { description: 'V8 TurboFan type confusion writeup' },
+          { description: 'Attacking JavaScript Engines' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Arbitrary memory read/write achieved', 'V8 heap corruption successful'],
+      artifacts: ['Memory dump showing V8 internal structure corruption']
+    },
+    operatorChecklist: [
+      '[ ] Identify type confusion primitive in target V8',
+      '[ ] Trigger confusion to achieve OOB access',
+      '[ ] Map V8 heap layout and find corruption targets',
+      '[ ] Corrupt vtable or JIT structures for code execution',
+      '[ ] Achieve browser sandbox escape if needed'
+    ],
+    vulnerabilityTypes: ['browser', 'v8', 'type-confusion', 'oob'],
+    references: [
+      { description: 'V8 TurboFan exploits' },
+      { description: 'Attacking JavaScript Engines (JavaScript o bod)' }
+    ]
+  },
+
+  dom_clobbering: {
+    id: 'dom_clobbering',
+    name: 'DOM Clobbering',
+    category: 'technique',
+    class: 'browser',
+    description: 'Web standard attack where DOM elements with specific IDs/-names override JavaScript variables and objects when they share the same name. By crafting HTML elements, an attacker can "clobber" (override) accessible objects, leading to XSS or bypassing security checks in browser extensions and web apps.',
+    preconditions: {
+      summary: 'Ability to inject HTML in a page where DOM elements can override JavaScript objects.',
+      required: [
+        'HTML injection capability in target application',
+        'Target code that accesses global variables which can be clobbered by DOM',
+        'Understanding of DOM hierarchy and naming collisions'
+      ],
+      detectionSteps: [
+        'Identify JavaScript variables/functions accessible via window',
+        'Find DOM elements that can override these names',
+        'Craft HTML to clobber target objects',
+        'Trigger exploitation path where clobbered objects cause XSS or other bugs'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Element ID Clobbering -> XSS',
+        description: 'Use DOM element ID to clobber security-critical JavaScript object.',
+        steps: [
+          'Find variable accessible via window.id that contains security check',
+          'Create DOM element with matching ID to clobber the variable',
+          'Clobbered value bypasses security check or leaks data',
+          'Achieve XSS or other client-side code execution'
+        ],
+        tools: ['Burp Suite', 'Chrome DevTools'],
+        codeSnippet: `<!-- DOM Clobbering: clobber element.id -->
+<!-- When document.getElementById('config') is called,
+     it returns the DOM element instead of config object -->
+
+<element id="config" data-safe="false">
+<!-- This clobbers window.config -->
+
+<script>
+  // Original code:
+  // if (config.safe) { /* do protected stuff */ }
+  // After clobbering: config is DOM element, truthy but no .safe property
+  // Or can clobber to specific value for bypass
+</script>`,
+        applicableLibc: 'N/A (browser-specific)',
+        references: [
+          { description: 'DOM Clobbering paper', url: 'https://portswigger.net/research/xss-into-more-secure-javascript-applications' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['DOM element overrode JavaScript object', 'Security check bypassed or XSS achieved'],
+      artifacts: ['HTML injection reflected in page']
+    },
+    operatorChecklist: [
+      '[ ] Identify injectable HTML context',
+      '[ ] Find JavaScript variables accessible via window that can be clobbered',
+      '[ ] Craft DOM element to override target variable',
+      '[ ] Trigger code path using clobbered object',
+      '[ ] Verify XSS or security bypass'
+    ],
+    vulnerabilityTypes: ['browser', 'xss', 'dom-clobbering', 'web'],
+    references: [
+      { description: 'DOM Clobbering techniques' }
+    ]
+  },
+
+  prototype_pollution: {
+    id: 'prototype_pollution',
+    name: 'Prototype Pollution',
+    category: 'technique',
+    class: 'browser',
+    description: 'JavaScript prototype chain attack where object properties are recursively merged without checking for dangerous dunder proto values (__proto__, constructor, prototype). Allows attacker to pollute global Object prototype, affecting all objects in the application. Used for XSS, code execution, or bypassing security checks.',
+    preconditions: {
+      summary: 'JavaScript code that merges objects recursively without prototype filtering.',
+      required: [
+        'JavaScript execution with merge/extend/deepcopy operations',
+        'No validation of __proto__ or constructor properties',
+        'Ability to trigger polluted code path'
+      ],
+      detectionSteps: [
+        'Find JavaScript code doing recursive merge/extend',
+        'Identify paths that allow attacker to inject __proto__',
+        'Pollute prototype to affect application behavior',
+        'Chain prototype pollution to XSS or RCE'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Pollution -> XSS Chain',
+        description: 'Pollute prototype then trigger XSS via affected code path.',
+        steps: [
+          'Identify merge function without prototype filtering',
+          'Inject __proto__ property to pollute Object.prototype',
+          'Find code path that uses polluted objects',
+          'Pollution changes behavior to create XSS vector',
+          'Trigger XSS to execute JavaScript'
+        ],
+        tools: ['Burp Suite', 'Chrome DevTools', 'Node.js'],
+        codeSnippet: `// Prototype pollution exploit
+// Find vulnerable merge: merge(target, source)
+
+// Pollute via __proto__
+merge({}, JSON.parse('{"__proto__":{"admin": true}}'))
+// Now Object.prototype.admin === true
+
+// Find XSS via polluted state
+// e.g., application checks: if (config.isAdmin) ...
+// After pollution: config.isAdmin = true
+// XSS triggered via some path using polluted config`,
+        applicableLibc: 'N/A (JavaScript)',
+        references: [
+          { description: 'Prototype Pollution to RCE' },
+          { description: 'PayloadsAllTheThings: Prototype Pollution' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Prototype polluted', 'Behavior changed leading to XSS/RCE'],
+      artifacts: ['JavaScript execution achieved']
+    },
+    operatorChecklist: [
+      '[ ] Find recursive merge/extend function',
+      '[ ] Test injection of __proto__ via JSON source',
+      '[ ] Pollute Object.prototype with attacker-controlled values',
+      '[ ] Find code path affected by pollution',
+      '[ ] Chain to XSS or RCE'
+    ],
+    vulnerabilityTypes: ['browser', 'javascript', 'prototype-pollution', 'xss'],
+    references: [
+      { description: 'Prototype Pollution research' }
+    ]
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // KERNEL EXPLOITATION
+  // ─────────────────────────────────────────────────────────
+
+  ret2dir: {
+    id: 'ret2dir',
+    name: 'RET2DIR (Return-to-Director)',
+    category: 'technique',
+    class: 'kernel',
+    description: 'Kernel exploitation technique that redirects execution to kernel space containing data or code sections (like the Direct Vector Table or other memory regions) rather than to specific gadget locations. Bypasses SMEP and other user/kernel separation by using legitimate kernel code to perform attacker-desired operations.',
+    preconditions: {
+      summary: 'Kernel executable with exploitable code sequences in unexpected locations.',
+      required: [
+        'Kernel executable with memory regions accessible via director function',
+        'Ability to control kernel execution flow',
+        'Understanding of kernel memory layout',
+        'SMEP/SMAP bypass technique'
+      ],
+      detectionSteps: [
+        'Map kernel executable to find director functions',
+        'Identify sequences in kernel that perform useful operations',
+        'Redirect execution to these sequences without returning to userland',
+        'SMEP bypass via kernel-space gadgets or other technique'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Kernel Director Function Exploitation',
+        description: 'Use kernel director functions to perform operations without leaving kernel space.',
+        steps: [
+          'Locate kernel code sections that can serve as gadgets',
+          'Find sequences like pop rax; ret or specific syscall setups',
+          'Redirect kernel execution to these sequences',
+          'Use to set up registers for syscall or other operations',
+          'Achieve privilege escalation without returning to userland'
+        ],
+        tools: ['vmlinux', 'Ropper', 'pwntools'],
+        codeSnippet: `# RET2DIR concept
+# Instead of ROP to userland-mapped gadgets, use kernel-space code
+
+# Find "director" function that can be used
+# Kernel contains many functions that can be chained
+
+# Example: use kernel's copy_to_user implementation
+# to write data without traditional ROP
+
+# SMEP bypass: use native kernel instructions
+kernel_gadget = kernel_base + 0x12345  # pop rdi; ret
+# Chain kernel gadgets to set up syscall`,
+        applicableLibc: 'N/A (kernel-specific)',
+        references: [
+          { description: 'RET2DIR: Rethinking Kernel Security' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Kernel code executed', 'Privilege escalation achieved'],
+      artifacts: ['GDB: kernel execution in unexpected region']
+    },
+    operatorChecklist: [
+      '[ ] Map kernel vmlinux to identify director functions',
+      '[ ] Find sequences in kernel space for exploitation',
+      '[ ] Bypass SMEP/SMAP if needed',
+      '[ ] Redirect execution to kernel code regions',
+      '[ ] Escalate privileges and verify'
+    ],
+    vulnerabilityTypes: ['kernel', 'smep-bypass', 'privilege-escalation'],
+    references: [
+      { description: 'RET2DIR paper' }
+    ]
+  },
+
+  dirty_pagetable: {
+    id: 'dirty_pagetable',
+    name: 'Dirty Pagetable',
+    category: 'technique',
+    class: 'kernel',
+    description: 'Kernel exploitation technique that corrupts process page tables to gain write access to kernel memory. By manipulating the page table entries (PTEs) of a process, an attacker can make kernel memory writable from userland, bypassing SMEP/SMAP and other memory protection mechanisms.',
+    preconditions: {
+      summary: 'Ability to corrupt page table entries or control a process\'s memory mapping.',
+      required: [
+        'Primitive to read/write user memory from kernel context',
+        'Understanding of page table structure (PML4, PDPT, PD, PT)',
+        'Ability to trigger kernel code path that accesses page tables'
+      ],
+      detectionSteps: [
+        'Identify page table of target process',
+        'Find way to manipulate PTE bits to make pages writable',
+        'Corrupt PTEs to map kernel memory as RW',
+        'Write to kernel memory to escalate privileges'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'PTE Manipulation -> Kernel Write',
+        description: 'Corrupt page table entries to make kernel memory writable.',
+        steps: [
+          'Get CR3 register value (physical address of page table)',
+          'Navigate PML4 -> PDPT -> PD -> PT to find target PTE',
+          'Modify PTE to set R/W bit (bit 1) without clearing US bit',
+          'Now kernel memory is writable from userland',
+          'Overwrite creds or other critical structures'
+        ],
+        tools: ['vmlinux', 'gdb', 'qemu'],
+        codeSnippet: `# Dirty pagetable concept
+# Each PTE controls one 4KB page
+# PTE format: [物理地址:39-12] [标志位:11-0]
+# Key flags: Bit 1 = R/W, Bit 2 = US (user super)
+
+# Get page table base from CR3
+page_table_base = read_cr3()
+
+# Walk to find kernel page PTE
+# PTE for kernel text at some offset
+
+# Make kernel page writable
+kernel_pte = page_table_base + offset_to_kernel_pte
+original_pte = read64(kernel_pte)
+# Set R/W bit (bit 1) without clearing US
+new_pte = original_pte | 0x2  # R/W bit
+write64(kernel_pte, new_pte)
+
+# Now kernel text page is writable
+# Overwrite with shellcode or ROP`,
+        applicableLibc: 'N/A (kernel-specific)',
+        references: [
+          { description: 'Dirty Pagetable exploit writeup' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Kernel memory writable from userland', 'Privilege escalation achieved'],
+      artifacts: ['PTEs modified', 'Creds overwritten']
+    },
+    operatorChecklist: [
+      '[ ] Obtain CR3 or navigate to process page table',
+      '[ ] Calculate PTE offset for target kernel page',
+      '[ ] Modify PTE to enable R/W without SMEP bypass',
+      '[ ] Write to kernel memory',
+      '[ ] Escalate privileges and restore PTE'
+    ],
+    vulnerabilityTypes: ['kernel', 'pagetable', 'smep-bypass', 'privilege-escalation'],
+    references: [
+      { description: 'Dirty Pagetable research' }
+    ]
+  },
+
+  slub_allocator_exploit: {
+    id: 'slub_allocator_exploit',
+    name: 'SLUB Allocator Exploitation',
+    category: 'technique',
+    class: 'kernel',
+    description: 'Exploitation of Linux kernel\'s SLUB memory allocator (simplified version of SLAB). Focuses on manipulating per-CPU freelists, remote freelists, and the partial slab mechanism to achieve arbitrary kernel memory write. Used in kernel heap exploitation when SLUB-specific behaviors can be exploited.',
+    preconditions: {
+      summary: 'Kernel heap overflow or use-after-free in SLUB-allocated object.',
+      required: [
+        'Ability to trigger SLUB allocation of specific objects',
+        'Kernel heap overflow or UAF to corrupt SLUB metadata',
+        'Understanding of SLUB per-CPU and remote freelist behavior',
+        'Ability to trigger allocation/free patterns'
+      ],
+      detectionSteps: [
+        'Identify SLUB-allocated object with overflow/UAF',
+        'Understand object size, cache behavior, and freelist structure',
+        'Corrupt SLUB metadata to redirect allocations',
+        'Achieve arbitrary write in kernel heap'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'SLUB Freelist Manipulation',
+        description: 'Corrupt SLUB freelist to redirect allocations to attacker-controlled memory.',
+        steps: [
+          'Allocate chunks to populate SLUB cache for target object',
+          'Free chunks to populate per-CPU or remote freelist',
+          'Overflow/UAF to corrupt next pointer in freelist',
+          'Trigger allocation to return attacker-controlled address',
+          'Use for arbitrary kernel write primitive'
+        ],
+        tools: ['gdb', 'vmlinux', 'kernel debugging environment'],
+        codeSnippet: `# SLUB exploitation concept
+# Each CPU has per-CPU freelist: list_entry = cpu_freelist[cpu]
+# freelist[0] -> chunk, chunk->next is next in freelist
+
+# Fill per-CPU freelist
+for i in range(3):
+    obj = kmalloc(size)
+    kfree(obj)
+
+# Corrupt next pointer via overflow
+overflow_into_obj->next = target_addr - offset
+
+# Next allocation returns target_addr
+new_obj = kmalloc(size)  # returns target_addr
+
+# Write primitive via new_obj`,
+        applicableLibc: 'N/A (kernel-specific)',
+        references: [
+          { description: 'Linux Kernel SLUB Exploitation' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['SLUB freelist corrupted', 'Allocations redirected to target'],
+      artifacts: ['GDB: kernel heap with corrupted freelist']
+    },
+    operatorChecklist: [
+      '[ ] Identify SLUB cache for target object',
+      '[ ] Understand per-CPU and remote freelist behavior',
+      '[ ] Trigger overflow/UAF to corrupt freelist next pointer',
+      '[ ] Allocate to redirect to target address',
+      '[ ] Use for arbitrary kernel write'
+    ],
+    vulnerabilityTypes: ['kernel', 'heap', 'slub', 'allocator'],
+    references: [
+      { description: 'SLUB Allocator Exploitation techniques' }
+    ]
+  },
+
+  kernel_cross_cache_attack: {
+    id: 'kernel_cross_cache_attack',
+    name: 'Kernel Cross-Cache Attack',
+    category: 'technique',
+    class: 'kernel',
+    description: 'Kernel heap technique where allocations in different cache sizes interact to cause corruption across cache boundaries. Similar to userland cross-cache but in kernel context. By manipulating SLUB cache behavior and timing, attacker can corrupt metadata that affects allocations in different caches.',
+    preconditions: {
+      summary: 'Kernel heap with multiple caches and ability to influence allocation patterns across cache sizes.',
+      required: [
+        'Kernel executable with multiple SLUB caches',
+        'Ability to allocate and free objects in different caches',
+        'Understanding of cache boundary interactions',
+        'Ability to influence cross-cache allocation patterns'
+      ],
+      detectionSteps: [
+        'Map kernel heap caches and their sizes',
+        'Identify cross-cache interaction opportunities',
+        'Trigger allocations to cross cache boundaries',
+        'Corrupt metadata across cache boundaries'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Cross-Cache Metadata Corruption',
+        description: 'Use cache interactions to corrupt metadata affecting other caches.',
+        steps: [
+          'Fill SLUB caches for multiple object sizes',
+          'Use heap spray or controlled allocation to influence cache state',
+          'Trigger free/alloc patterns that cross cache boundaries',
+          'Corrupt metadata that affects different cache allocations',
+          'Achieve arbitrary write via cross-cache manipulation'
+        ],
+        tools: ['gdb', 'vmlinux', 'kernel heap analysis'],
+        codeSnippet: `# Kernel cross-cache attack concept
+# Different caches: size-32, size-64, size-128, etc
+# Cross-cache corruption: freeing chunk in one cache
+# affects metadata of adjacent cache
+
+# Example: kmalloc-32 and kmalloc-64 are adjacent
+# Overflow from kmalloc-32 chunk can corrupt kmalloc-64 metadata
+
+# Spray to influence cache layout
+spray_objects(kmalloc(32), count=100)
+spray_objects(kmalloc(64), count=100)
+
+# Overflow from 32-byte chunk into 64-byte metadata region
+overflow_corrupts_64byte_freelist(target)`,
+        applicableLibc: 'N/A (kernel-specific)',
+        references: [
+          { description: 'Kernel cross-cache attack research' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Cross-cache corruption successful', 'Arbitrary write via cache boundary manipulation'],
+      artifacts: ['GDB: corrupted SLUB metadata across caches']
+    },
+    operatorChecklist: [
+      '[ ] Map kernel SLUB caches and their sizes',
+      '[ ] Identify interaction points between caches',
+      '[ ] Use allocation patterns to manipulate cache state',
+      '[ ] Trigger cross-cache boundary corruption',
+      '[ ] Exploit for arbitrary kernel write'
+    ],
+    vulnerabilityTypes: ['kernel', 'heap', 'cross-cache', 'slub'],
+    references: [
+      { description: 'Kernel cross-cache attack paper' }
+    ]
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // CFI/PAC BYPASS
+  // ─────────────────────────────────────────────────────────
+
+  cfi_bypass: {
+    id: 'cfi_bypass',
+    name: 'CFI Bypass (Control Flow Integrity)',
+    category: 'technique',
+    class: 'mitigation-bypass',
+    description: 'Techniques to bypass Control Flow Integrity (CFI) protections that enforce forward-edge (indirect call/jump) and backward-edge (return) integrity. Modern CFI implementations include LLVM CFI, Windows CFI, and kernel CFI. Bypasses often exploit limitations in shadow stacks, ACFG gaps, or pragmatic security decisions.',
+    preconditions: {
+      summary: 'Binary or kernel with CFI enabled but exploitable gaps in protection.',
+      required: [
+        'CFI-enabled binary/kernel',
+        'Understanding of which control flow transfers are protected',
+        'Knowledge of CFI implementation gaps',
+        'Primitive to corrupt control flow despite CFI'
+      ],
+      detectionSteps: [
+        'Check for CFI: readelf -h binary | grep CFI',
+        'Identify protected vs unprotected edges',
+        'Find gaps (e.g., vtable calls, indirect calls through registers)',
+        'Exploit CFI gap to redirect control flow'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Forward-Edge CFI Bypass via VTable',
+        description: 'Bypass CFI by corrupting C++ vtables which may not be fully checked.',
+        steps: [
+          'Identify vtable corruption path (CFI may not check vtable integrity fully)',
+          'Corrupt vtable pointer to point to attacker-controlled vtable',
+          'Place fake vtable entries pointing to ROP gadgets',
+          'Trigger virtual function call to execute gadgets',
+          'CFI check passes because call target is valid vtable entry'
+        ],
+        tools: ['pwntools', 'ROPgadget', 'gdb'],
+        codeSnippet: `# CFI bypass via vtable corruption
+# CFI allows indirect calls to valid vtable entries
+# Even if vtable itself is corrupted
+
+# Corrupt object's vtable pointer
+*(uint64_t*)(obj + vtable_offset) = fake_vtable_addr
+
+# Place ROP gadgets as fake vtable entries
+fake_vtable[0] = pop_rdi_ret  # gadget 1
+fake_vtable[1] = binsh_addr   # argument
+fake_vtable[2] = system_addr  # gadget 2
+
+# Virtual call triggers vtable[index]
+# CFI sees: indirect call to valid vtable entry → allowed
+obj->virtual_method()`,  // This line intentionally ends with );
+        applicableLibc: 'N/A (binary-specific)',
+        references: [
+          { description: 'Control Flow Integrity considerations' },
+          { description: 'Bypassing LLVM CFI' }
+        ]
+      },
+      {
+        name: 'Backward-Edge CFI (Stack Canopy) Bypass',
+        description: 'Bypass return protection via stack pivot or canary bypass.',
+        steps: [
+          'If CFI only protects returns (backward-edge), use call gadgets',
+          'Or pivot stack to fake frame that passes shadow stack check',
+          'Use COP (Call-Oriented Programming) instead of ROP',
+          'Execute code without triggering return instrumentation'
+        ],
+        tools: ['ROPgadget', 'pwntools'],
+        codeSnippet: `# CFI backward-edge bypass via stack pivot
+# If only returns are protected (shadow stack), not calls
+
+# Instead of ROP (returns), use COP (calls)
+call_gadget1 = binary + 0x1234  # call eax; ret
+call_gadget2 = binary + 0x5678  # call [edi+8]; ret
+
+# Pivot stack to controlled location
+rop_chain = [call_gadget1, arg1, call_gadget2, arg2]
+# Execute without return instructions`,
+        applicableLibc: 'N/A (binary-specific)',
+        references: [
+          { description: 'Bypassing backward-edge CFI' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Control flow redirected despite CFI', 'Code execution achieved'],
+      artifacts: ['GDB: execution bypassing CFI instrumentation']
+    },
+    operatorChecklist: [
+      '[ ] Identify CFI implementation and scope',
+      '[ ] Find unprotected control flow edges',
+      '[ ] Use vtable/COP/stack pivot to bypass forward-edge CFI',
+      '[ ] Or use call gadgets to bypass backward-edge CFI',
+      '[ ] Verify code execution achieved'
+    ],
+    vulnerabilityTypes: ['cfi', 'bypass', 'vtable', 'cop', 'stack-pivot'],
+    references: [
+      { description: 'CFI Bypass techniques research' }
+    ]
+  },
+
+  pac_bypass_arm: {
+    id: 'pac_bypass_arm',
+    name: 'PAC Bypass (ARM Pointer Authentication)',
+    category: 'technique',
+    class: 'mitigation-bypass',
+    description: 'Bypass ARM Pointer Authentication Code (PAC) protections on ARM64 processors. PAC prevents control flow hijacking by signing pointers with cryptographic codes that must authenticate correctly before use. Bypasses include PAC collision, speculative execution attacks, or exploiting PAC implementation bugs.',
+    preconditions: {
+      summary: 'ARM64 target with PAC enabled (Apple Silicon, ARMv8.3+ servers).',
+      required: [
+        'ARM64 processor with PAC support',
+        'Binary with PAC signing enabled',
+        'Understanding of which pointers are signed',
+        'Bypass technique for PAC implementation'
+      ],
+      detectionSteps: [
+        'Check for PAC: look for pacia, pacib, pacda instructions',
+        'Identify which pointers are authenticated',
+        'Find way to either bypass authentication or collide PAC values',
+        'Exploit to redirect control flow'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'PAC Collision Attack',
+        description: 'Use pointer collision to bypass PAC by crafting values that authenticate to multiple pointers.',
+        steps: [
+          'Understand PAC algorithm (applies to bits 55-63 of pointer)',
+          'Find pointer values where collision possible (same PAC for different pointers)',
+          'Craft pointer that authenticates correctly for multiple uses',
+          'Overwrite authenticated pointer with collision value',
+          'Control flow redirected - PAC accepts forged pointer'
+        ],
+        tools: ['gdb', 'capstone', 'binary analysis'],
+        codeSnippet: `# PAC bypass via pointer collision
+# PAC is computed over some bits, others are pointer value
+# If you can find collision: pointer A's PAC = pointer B's PAC
+# Then valid PAC for A also valid for B
+
+# Find gadgets in memory
+gadget1_addr = 0x1234
+gadget2_addr = 0x5678
+
+# Craft authenticated pointer
+# Some bits are significant, PAC covers others
+authenticated = sign_pointer(gadget1_addr, pac_key)
+
+# Collide: authenticated also works for gadget2_addr
+# Overwrite saved return address with collided authenticated pointer
+# When function returns: pac authentication succeeds (for gadget2)
+# Execution goes to gadget2 instead of original return`,
+        applicableLibc: 'N/A (architecture-specific)',
+        references: [
+          { description: 'PAC bypass research' },
+          { description: 'Arm Pointer Authentication' }
+        ]
+      },
+      {
+        name: 'Speculative Execution PAC Bypass',
+        description: 'Use Spectre-style speculation to bypass PAC checks.',
+        steps: [
+          'Train branch predictor to speculatively jump to gadget',
+          'While PAC check is pending, speculatively execute gadget',
+          'PAC result available too late - speculative execution already happened',
+          'Timing attack to leak PAC bits or execute before check completes'
+        ],
+        tools: ['binary analysis', 'timing attack tooling'],
+        codeSnippet: `# PAC bypass via speculative execution
+# PAC check may be in separate stage from execution
+# Speculatively execute gadget before PAC resolves
+
+# Create return-oriented style gadget chain
+# But trigger speculatively before PAC check completes
+
+# Timing: arrange so PAC check is delayed
+# Speculative path uses authenticated pointer incorrectly
+# By time PAC fails, gadget already executed`,
+        applicableLibc: 'N/A (architecture-specific)',
+        references: [
+          { description: 'Speculative PAC bypass' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['PAC authentication bypassed', 'Control flow redirected on ARM64'],
+      artifacts: ['GDB: execution at authenticated pointer location']
+    },
+    operatorChecklist: [
+      '[ ] Confirm PAC is in use (pacia/pacib instructions)',
+      '[ ] Identify authenticated pointers and their usage',
+      '[ ] Find collision or implementation flaw',
+      '[ ] Bypass PAC to redirect control flow',
+      '[ ] Verify execution achieved'
+    ],
+    vulnerabilityTypes: ['arm', 'pac', 'pointer-authentication', 'bypass'],
+    references: [
+      { description: 'PAC bypass research and whitepapers' }
+    ]
   }
 };
 
