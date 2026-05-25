@@ -131,6 +131,12 @@ export const KB_MAPPING: Record<string, TechniqueDetails | undefined> = {
   'mmap_overlapping_chunks': PWN_KNOWLEDGE_BASE['mmap_overlapping_chunks'],
   'sysmalloc_int_free': PWN_KNOWLEDGE_BASE['sysmalloc_int_free'],
   'safe_link_double_protect': PWN_KNOWLEDGE_BASE['safe_link_double_protect'],
+  'safe_linking_bypass': PWN_KNOWLEDGE_BASE['safe_linking_bypass'],
+  'large_bin_attack_modern': PWN_KNOWLEDGE_BASE['large_bin_attack_modern'],
+  'unsorted_bin_attack_classic': PWN_KNOWLEDGE_BASE['unsorted_bin_attack_classic'],
+  'house_of_prime': PWN_KNOWLEDGE_BASE['house_of_prime'],
+  'house_of_rust': PWN_KNOWLEDGE_BASE['house_of_rust'],
+  'house_of_mind_original': PWN_KNOWLEDGE_BASE['house_of_mind_original'],
 
   // ─── HEAP ALIASES ───
   'fastbin_dup_into_stack': PWN_KNOWLEDGE_BASE['fastbin_reverse_into_tcache'],
