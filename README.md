@@ -410,7 +410,12 @@ Integrated knowledge base includes complete documentation for:
 ## Data Structure
 
 ### pwn-data.ts
-Original technique tree structure with vulnerability type tagging
+Original technique tree structure with vulnerability type tagging. Each technique now includes:
+
+- **Vulnerability Tags** (`stack`, `format`, `heap`, `sandbox` arrays): Granular sub-tags beyond the 4 main categories — e.g., `stack: ['buffer-overflow', 'ret2libc', 'rop', 'nx-bypass']` enables precise filtering
+- **Difficulty** (`beginner` | `intermediate` | `expert`): Helps learners prioritize what to study first
+- **Practice Links** (`PracticeLink[]`): Curated links to pwn.college, how2heap, CTF writeups, and papers — building a learning path per technique
+- **Common Pitfalls** (`string[]`): "Sering gagal karena apa" — Real failure modes documented per technique (e.g., canary has null bytes, glibc version mismatch, wrong offset)
 
 ### pwn-knowledge-base.ts
 Comprehensive knowledge base with:
@@ -430,6 +435,55 @@ D3 visualization utilities:
 - Color/opacity management by category
 - Link path generation
 - Node highlighting logic
+
+## Filter System
+
+The vulnerability tag arrays in each technique enable fine-grained filtering:
+
+| Filter Tag | Examples |
+|---|---|
+| `buffer-overflow` | Stack overflow fundamentals |
+| `ret2libc` | Classic libc call exploitation |
+| `rop` | Return-oriented programming gadgets |
+| `nx-bypass` | No-execute mitigation bypass |
+| `canary-bypass` | Stack canary evasion |
+| `format-string` | FSB root techniques |
+| `arbitrary-read` | Memory leak via format |
+| `arbitrary-write` | %n write primitives |
+| `got-overwrite` | GOT hijacking |
+| `heap-based` | Heap exploitation root |
+| `uaf` | Use-after-free primitives |
+| `double-free` | Tcache/fastbin double free |
+| `fastbin-attack` | Fastbin consolidation attacks |
+| `tcache-poisoning` | Tcache entry overwrite |
+| `house-of-x` | Glibc House series |
+| `fsop` | File stream-oriented programming |
+| `sandbox-escape` | Container/kernel breakouts |
+| `seccomp-bypass` | Seccomp filter evasion |
+
+## Difficulty Progression
+
+```mermaid
+flowchart LR
+    BEGINNER["Beginner<br/>buffer_overflow<br/>format_string<br/>canary_leak<br/>root"]
+    INTERMEDIATE["Intermediate<br/>heap_exploit<br/>rop_chain<br/>use_after_free<br/>aslr_prot"]
+    EXPERT["Expert<br/>sandbox_escape<br/>fsop_exploit<br/>brop<br/>house_of_corrosion"]
+
+    BEGINNER --> INTERMEDIATE --> EXPERT
+
+    style BEGINNER fill:#10b981,color:#fff
+    style INTERMEDIATE fill:#f97316,color:#fff
+    style EXPERT fill:#ef4444,color:#fff
+```
+
+## Learning Path (Practice Links)
+
+Each technique links to curated practice resources:
+
+- **pwn.college** — Structured coursework with flags and VM environments
+- **how2heap** — Canonical PoC implementations for each technique
+- **CTF Writeups** — Real-world exploitation walkthroughs
+- **Papers** — Academic references and deeper theory
 
 ## Keyboard Shortcuts & Interactions
 

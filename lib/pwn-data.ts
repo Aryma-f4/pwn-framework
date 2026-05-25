@@ -1,3 +1,9 @@
+export interface PracticeLink {
+  name: string;
+  url: string;
+  platform: 'pwn-college' | 'ctf-writeup' | 'github' | 'paper';
+}
+
 export interface Technique {
   id: string;
   name: string;
@@ -11,6 +17,9 @@ export interface Technique {
   constraints: string[];
   blueprint: string;
   children?: string[];
+  difficulty?: 'beginner' | 'intermediate' | 'expert';
+  practiceLinks?: PracticeLink[];
+  commonPitfalls?: string[];
 }
 
 export const PWN_TECHNIQUES: Record<string, Technique> = {
@@ -27,6 +36,7 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     constraints: [],
     blueprint: 'journey.start();',
     children: ['setup_tools_root', 'prerequisites_root', 'tools_root', 'exploitation_root', 'mitigations_root', 'recon_tools_root'],
+    difficulty: 'beginner',
   },
   
   exploitation_root: {
@@ -64,30 +74,42 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     id: 'aslr_prot',
     name: 'ASLR / PIE',
     category: 'mitigation',
-    stack: [],
-    format: [],
-    heap: [],
+    stack: ['info-leak', 'partial-overwrite', 'bruteforce'],
+    format: ['info-leak', 'format-string-leak'],
+    heap: ['info-leak', 'heap-layout-leak'],
     sandbox: [],
     description: 'Address Space Layout Randomization & Position Independent Executable randomizes memory segments',
     prerequisites: ['Kernel support', 'Compiler flags'],
     constraints: ['Must leak an address to bypass'],
     blueprint: 'aslr_defense() {\n  echo 2 > /proc/sys/kernel/randomize_va_space;\n  // gcc -pie -fPIE\n}',
     children: ['info_leak_bypass', 'partial_overwrite'],
+    difficulty: 'intermediate',
+    commonPitfalls: [
+      'Leaking wrong offset — libc leak minus wrong offset gives garbage base',
+      'PIE vs libc ASLR confusion — PIE randomizes .text, libc randomizes heap/stack independently',
+      'Partial overwrite needs known page — low nibble not randomized if target on same page as leak',
+    ],
   },
 
   info_leak_bypass: {
     id: 'info_leak_bypass',
     name: 'Information Leak',
     category: 'technique',
-    stack: [],
-    format: [],
-    heap: [],
+    stack: ['info-leak', 'format-string', 'oob-read'],
+    format: ['format-string-leak', 'oob-read'],
+    heap: ['heap-info-leak', 'uaf-info-leak'],
     sandbox: [],
     description: 'Leaking a pointer to calculate the base address of a randomized region',
     prerequisites: ['Out-of-bounds read or format string'],
     constraints: [],
     blueprint: 'bypass_aslr_leak() {\n  const leak = trigger_oob_read();\n  const libc_base = leak - offset_in_libc;\n  const system_addr = libc_base + system_offset;\n}',
     children: [],
+    difficulty: 'intermediate',
+    commonPitfalls: [
+      'Leaked address has null bytes — can\'t use in ROP chain directly, need partial overwrite or alternate gadget',
+      'Wrong offset — need correct symbol offset from leak to base for each libc version',
+      'Leak from stack vs heap vs libc — know which region the leaked address belongs to',
+    ],
   },
 
   partial_overwrite: {
@@ -109,7 +131,7 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     id: 'nx_prot',
     name: 'NX (No-Execute)',
     category: 'mitigation',
-    stack: [],
+    stack: ['rop', 'jop', 'srop', 'stack-pivot', 'ret2vdso'],
     format: [],
     heap: [],
     sandbox: [],
@@ -118,6 +140,12 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     constraints: ['Forces attacker to use code-reuse attacks'],
     blueprint: 'nx_defense() {\n  // Page tables mark stack/heap segments\n  // without the executable permission bit\n  // gcc -Wl,-z,noexecstack\n}',
     children: ['rop_bypass'],
+    difficulty: 'intermediate',
+    commonPitfalls: [
+      'Forgetting NX exists — exploit crashes with SIGSEGV on shellcode attempt',
+      'Missing syscall gadget — syscalls require rax=59, rdi=ptr, rsi=0, rdx=0',
+      'Gadget alignment — ret must land on pop; ret gadget, not just any ret',
+    ],
   },
 
   rop_bypass: {
@@ -139,8 +167,8 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     id: 'canary_prot',
     name: 'Stack Canaries',
     category: 'mitigation',
-    stack: [],
-    format: [],
+    stack: ['canary-leak', 'canary-bruteforce', 'format-string-canary'],
+    format: ['format-string-canary-leak'],
     heap: [],
     sandbox: [],
     description: 'A random value placed before the saved return pointer to detect stack buffer overflows',
@@ -148,14 +176,21 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     constraints: ['Must be leaked or bypassed to overwrite RIP'],
     blueprint: 'canary_defense() {\n  // gcc -fstack-protector-all\n  setup_canary() {\n    rax = fs:0x28;\n    [rbp-0x8] = rax;\n  }\n}',
     children: ['canary_leak', 'canary_bruteforce'],
+    difficulty: 'beginner',
+    commonPitfalls: [
+      'Canary value has null bytes — must send raw bytes, not hex string',
+      'Bruteforce on non-forking server — exhausts connections and fails',
+      'Wrong byte order — canary is u64, p64() endianness matters',
+      'Canary offset not found — crash happens before reaching check if offset wrong',
+    ],
   },
 
   canary_leak: {
     id: 'canary_leak',
     name: 'Canary Leak',
     category: 'leaf',
-    stack: [],
-    format: [],
+    stack: ['canary-leak', 'format-string-leak', 'stack-read'],
+    format: ['format-string-canary-leak'],
     heap: [],
     sandbox: [],
     description: 'Reading the canary value using a format string or OOB read before returning',
@@ -163,6 +198,15 @@ export const PWN_TECHNIQUES: Record<string, Technique> = {
     constraints: [],
     blueprint: 'leak_canary() {\n  // %N$p where N is canary offset\n  canary = parse_hex(send_fmt_string("%15$p"));\n  payload = pad + p64(canary) + p64(0) + p64(rip);\n}',
     children: [],
+    difficulty: 'beginner',
+    practiceLinks: [
+      { name: 'Pwn College: Stack Canaries', url: 'https://pwn.college/software-exploitation/stack-canaries', platform: 'pwn-college' },
+    ],
+    commonPitfalls: [
+      'Canary has null bytes — p64(canary) sends raw bytes, not hex string',
+      'Wrong offset for canary position — start from %1$p and count until you see 0x00 followed by digits',
+      'Canary reused across threads (glibc) — thread-local storage (fs:0x28) different from stack-based',
+    ],
   },
 
   canary_bruteforce: {
@@ -355,7 +399,7 @@ continue
     id: 'buffer_overflow',
     name: 'Buffer Overflow',
     category: 'recon',
-    stack: ['stack-based'],
+    stack: ['stack-based', 'buffer-overflow', 'ret2libc', 'rop', 'nx-bypass', 'canary-bypass'],
     format: [],
     heap: [],
     sandbox: [],
@@ -364,13 +408,25 @@ continue
     constraints: ['Requires buffer size knowledge', 'Address space must be predictable'],
     blueprint: 'buffer_overflow_exploit() {\n  const payload = craft_rop_chain();\n  trigger_vulnerable_function(payload);\n  hijack_execution_flow();\n}',
     children: ['stack_pivot', 'rop_chain', 'ret2csu', 'ret2dlresolve', 'srop', 'stack_clash', 'brop', 'jop', 'ret2vdso'],
+    difficulty: 'beginner',
+    practiceLinks: [
+      { name: 'Pwn College: Buffer Overflow', url: 'https://pwn.college/program-memory/buffer-overflow', platform: 'pwn-college' },
+      { name: 'CTF101: Buffer Overflow', url: 'https://ctf101.org/binary-exploitation/buffer-overflow/', platform: 'ctf-writeup' },
+    ],
+    commonPitfalls: [
+      'Misjudging overflow offset — use cyclic pattern (cyclic -l $rsp) to find exact padding',
+      'Forgetting about null bytes in addresses — use hex encoding carefully',
+      'Stack alignment issues on x64 — gadget must maintain stack alignment for syscalls',
+      'Little-endian byte ordering — p64() stores least significant byte at lowest address',
+      'Canary not leaked before return — binary crashes before reaching ROP chain',
+    ],
   },
 
   brop: {
     id: 'brop',
     name: 'Blind ROP (BROP)',
     category: 'technique',
-    stack: ['stack-based'],
+    stack: ['brop', 'blind-rop', 'stop-gadget', 'plt-gadget'],
     format: [],
     heap: [],
     sandbox: [],
@@ -387,6 +443,16 @@ continue
 6. Identify libc version from leaked pointers
 7. Build final ROP chain`,
     children: ['rop_exec'],
+    difficulty: 'expert',
+    practiceLinks: [
+      { name: 'Pwn College: BROP', url: 'https://pwn.college/software-exploitation/blind-rop', platform: 'pwn-college' },
+    ],
+    commonPitfalls: [
+      'Non-forking server — every crash kills the only process, BROP fails',
+      'PIE enabled — requires brute-forcing 1 byte (4K pages) or 2 bytes (2MB pages) — very slow',
+      'Stopping at wrong address — stop gadget must truly return without crashing or exiting',
+      'Confusing plt vs got entries — need to identify which plt slot corresponds to libc calls',
+    ],
   },
 
   jop: {
@@ -457,7 +523,7 @@ continue
     id: 'rop_chain',
     name: 'ROP Chain',
     category: 'technique',
-    stack: ['stack-based'],
+    stack: ['rop', 'gadget', 'pop-gadget', 'call-gadget', 'syscall'],
     format: [],
     heap: [],
     sandbox: [],
@@ -466,6 +532,17 @@ continue
     constraints: ['Gadget availability', 'Instruction alignment'],
     blueprint: 'rop_exploit() {\n  const gadgets = find_gadgets(binary);\n  const chain = build_chain(gadgets, payload);\n  execute_chain(chain);\n}',
     children: ['rop_exec'],
+    difficulty: 'intermediate',
+    practiceLinks: [
+      { name: 'Pwn College: ROP', url: 'https://pwn.college/software-exploitation/rop', platform: 'pwn-college' },
+      { name: 'CTF101: ROP', url: 'https://ctf101.org/binary-exploitation/rop/', platform: 'ctf-writeup' },
+    ],
+    commonPitfalls: [
+      'Gadget doesn\'t end in ret — ROPgadget might report gadgets that don\'t cleanly return',
+      'Missing pop rdi; ret — can use ret2csu or other gadget combos instead',
+      'Stack alignment for syscalls — x64 syscalls require rsp % 16 == 0, gadget chain must maintain this',
+      'Binary stripped — no symbols, need to leak .text or find gadgets via ropper --nosorted',
+    ],
   },
 
   rop_exec: {
@@ -581,8 +658,8 @@ continue
     id: 'format_string',
     name: 'Format String',
     category: 'recon',
-    stack: [],
-    format: ['format-string'],
+    stack: ['stack-overflow', 'stack-pivot'],
+    format: ['format-string', 'arbitrary-read', 'arbitrary-write', 'got-overwrite', 'canary-leak', 'info-leak'],
     heap: [],
     sandbox: [],
     description: 'Exploits unvalidated printf-style format strings to leak/write memory',
@@ -590,6 +667,18 @@ continue
     constraints: ['Format string position discovery', 'Address alignment'],
     blueprint: 'format_string_exploit() {\n  const offset = discover_offset();\n  const payload = "%x".repeat(offset) + "%n";\n  leak_memory(payload);\n}',
     children: ['format_leak', 'format_write', 'blind_format', 'stack_chk_fail_hijack'],
+    difficulty: 'beginner',
+    practiceLinks: [
+      { name: 'Pwn College: Format String', url: 'https://pwn.college/software-exploitation/format-string-vulnerabilities', platform: 'pwn-college' },
+      { name: 'CTF101: Format String', url: 'https://ctf101.org/binary-exploitation/format-string-vulnerability/', platform: 'ctf-writeup' },
+    ],
+    commonPitfalls: [
+      'Wrong offset — %N$p where N starts from 1, not 0. Try %p %p %p until you see addresses',
+      'Confusing width vs precision — %10s prints 10-char string, %s followed by %10s does different things',
+      'Off-by-one on %n write — %hn writes 2 bytes, %hhn writes 1 byte, must use correct width to avoid crashes',
+      'Format string in loop — crashes on second iteration because wrote too many bytes to same address',
+      'Not null-terminating writes — %Nc does not write null, may corrupt adjacent memory',
+    ],
   },
 
   format_leak: {
@@ -715,13 +804,26 @@ continue
     category: 'recon',
     stack: [],
     format: [],
-    heap: ['heap-based'],
+    heap: ['heap-based', 'heap-overflow', 'uaf', 'double-free', 'fastbin-attack', 'tcache-poisoning', 'house-of-x', 'unsorted-bin-attack', 'large-bin-attack', 'fsop'],
     sandbox: [],
     description: 'Exploits heap metadata and allocator behavior for code execution',
     prerequisites: ['Heap overflow', 'Allocator implementation knowledge'],
     constraints: ['Heap layout control', 'Metadata accessible'],
     blueprint: 'heap_exploit() {\n  corrupt_heap_metadata();\n  trigger_allocator_vuln();\n  achieve_code_exec();\n}',
     children: ['use_after_free', 'double_free', 'house_of_botcake', 'house_of_rabbit', 'house_of_roman', 'house_of_lore', 'tcache_stashing', 'house_of_force', 'house_of_spirit', 'house_of_einherjar', 'unsorted_bin_attack', 'large_bin_attack', 'first_fit', 'poison_null_byte', 'house_of_husk', 'house_of_corrosion', 'house_of_apple', 'house_of_cat', 'overlapping_chunks', 'signal_handler_exploit', 'house_of_banana', 'house_of_emma', 'house_of_blaze', 'house_of_fun', 'house_of_error', 'house_of_blind', 'house_of_crane', 'house_of_atum', 'house_of_kiwi', 'house_of_card'],
+    difficulty: 'intermediate',
+    practiceLinks: [
+      { name: 'Pwn College: Heap Exploitation', url: 'https://pwn.college/memory-safety/heap', platform: 'pwn-college' },
+      { name: 'how2heap', url: 'https://github.com/shellphish/how2heap', platform: 'github' },
+      { name: 'Glibc House of Spirit', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.27/house_of_spirit.c', platform: 'github' },
+    ],
+    commonPitfalls: [
+      'Glibc version mismatch — techniques behave differently across 2.26, 2.27, 2.31, 2.34, 2.38+',
+      'Confusing malloc vs calloc — calloc zeros memory and bypasses tcache, breaking many exploits',
+      'Off-by-one in chunk size — prev_size must align to 0x10, wrong size causes consolidate failure',
+      'Forgetting PREV_INUSE bit — unlinking requires prev_size prev_inuse=0, free() checks this',
+      'tcache double-free key check (glibc 2.26+) — must overwrite tcach.entries[key] to bypass',
+    ],
   },
 
   use_after_free: {
@@ -730,7 +832,7 @@ continue
     category: 'technique',
     stack: [],
     format: [],
-    heap: ['heap-based'],
+    heap: ['uaf', 'type-confusion', 'vtable-hijack', 'heap-spray'],
     sandbox: [],
     description: 'A memory pointer is used after the memory it points to has been freed. The attacker reallocates a same-size object into the freed slot, causing the dangling pointer to operate on attacker-controlled data (type confusion / vtable hijack).',
     prerequisites: ['free(p) called without p = NULL', 'Later code dereferences p', 'Ability to allocate controlled data in the freed slot'],
@@ -746,6 +848,17 @@ continue
   obj->method();  // UAF: uses dangling obj → calls fake vtable!
 }`,
     children: ['heap_spray', 'vtable_hijack'],
+    difficulty: 'intermediate',
+    practiceLinks: [
+      { name: 'Pwn College: Use-After-Free', url: 'https://pwn.college/memory-safety/use-after-free', platform: 'pwn-college' },
+      { name: 'UAF + House of Spirit', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.27/house_of_spirit.c', platform: 'github' },
+    ],
+    commonPitfalls: [
+      'Reallocation size mismatch — malloc must return same size class, or chunk goes to different bin',
+      'Use happens before realloc — timing window is narrow in fast code paths',
+      'Forgetting null assignment — p still points to freed memory after free(), code might still dereference',
+      'Thread-local arenas (glibc 2.26+) — per-thread tcache can delay reuse, exploit fails',
+    ],
   },
 
   double_free: {
@@ -754,13 +867,23 @@ continue
     category: 'technique',
     stack: [],
     format: [],
-    heap: ['heap-based'],
+    heap: ['double-free', 'fastbin-attack', 'tcache-poisoning', 'fastbin-dup'],
     sandbox: [],
     description: 'Frees the same memory twice to corrupt heap state',
     prerequisites: ['Control over free calls', 'Allocator checks disabled'],
     constraints: ['Ptmalloc/jemalloc specific', 'Glibc version dependent'],
     blueprint: 'double_free() {\n  const ptr = allocate();\n  free(ptr);\n  free(ptr);  // Double free\n  reallocate_for_control();\n}',
     children: ['heap_control'],
+    difficulty: 'intermediate',
+    practiceLinks: [
+      { name: 'Pwn College: Heap Normal', url: 'https://pwn.college/memory-safety/heap', platform: 'pwn-college' },
+      { name: 'how2heap: fastbin_dup', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.27/fastbin_dup.c', platform: 'github' },
+    ],
+    commonPitfalls: [
+      'tcache key check (glibc 2.26+) — double free to tcache crashes unless key overwritten',
+      'Fastbin size validation — corrupted size must match expected bin for attack to work',
+      'Chunk must be on correct free list — wrong size class sends to wrong bin',
+    ],
   },
 
   vtable_hijack: {
@@ -799,13 +922,23 @@ continue
     category: 'technique',
     stack: [],
     format: [],
-    heap: ['heap-based'],
+    heap: ['house-of-force', 'top-chunk-corrupt', 'malloc-overflow'],
     sandbox: [],
     description: 'Overwriting the Top Chunk (wilderness) size to -1, enabling massive mallocs that wrap around the address space to return a pointer anywhere in memory.',
     prerequisites: ['Heap overflow', 'Glibc < 2.29'],
     constraints: ['Target address must be at a higher address than heap base'],
     blueprint: 'force() {\n  overwrite_top_chunk_size(-1);\n  malloc(target - top_chunk - 0x20);\n  malloc(0x10); // Returns target ptr\n}',
     children: ['heap_control'],
+    difficulty: 'intermediate',
+    practiceLinks: [
+      { name: 'how2heap: house_of_force', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.27/house_of_force.c', platform: 'github' },
+    ],
+    commonPitfalls: [
+      'Glibc 2.29+ removes top chunk size -1 trick — House of Force no longer works',
+      'Distance miscalculation — off by 0x10 causes misalignment or crash',
+      'Target must be higher address than heap — can\'t underflow to lower addresses',
+      'Integer overflow in malloc size — wrapping calculation overflows and returns wrong size',
+    ],
   },
 
   house_of_spirit: {
@@ -814,13 +947,23 @@ continue
     category: 'technique',
     stack: [],
     format: [],
-    heap: ['heap-based'],
+    heap: ['house-of-spirit', 'fake-chunk', 'fastbin'],
     sandbox: [],
     description: 'Forging a fake chunk structure on the stack (or .bss) and passing its address to free(), putting the stack pointer into the fastbin.',
     prerequisites: ['Ability to call free() on arbitrary address', 'Stack/BSS write access'],
     constraints: ['Must forge valid chunk size and next chunk size'],
     blueprint: 'spirit() {\n  forge_chunk_on_stack(0x40, 0x1234);\n  free(stack_ptr);\n  malloc(0x30); // Returns stack ptr\n}',
     children: ['heap_control'],
+    difficulty: 'intermediate',
+    practiceLinks: [
+      { name: 'how2heap: house_of_spirit', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.27/house_of_spirit.c', platform: 'github' },
+    ],
+    commonPitfalls: [
+      'Forged chunk size must match fastbin size class — 0x40 goes to 0x40 fastbin, not 0x30',
+      'Next chunk fake prev_size must be >= minimum size, otherwise free() crashes',
+      'Free evaluates next chunk header — must have fake next chunk or safe unlink data after forged chunk',
+      'Stack address not accessible from heap perspective — alignment issues with fastbin LIFO',
+    ],
   },
 
   house_of_einherjar: {
@@ -1253,13 +1396,24 @@ continue
     category: 'recon',
     stack: [],
     format: [],
-    heap: ['heap-based'], // often combined with heap
+    heap: ['heap-overflow', 'uaf', 'fsop', '_io_file'],
     sandbox: [],
     description: 'File Stream Oriented Programming - corrupts _IO_FILE structures (like stdin, stdout, stderr) to hijack control flow',
     prerequisites: ['Arbitrary write or heap overflow on FILE structs'],
     constraints: ['Glibc version specific vtable mitigations'],
     blueprint: 'fsop() {\n  corrupt_FILE_vtable();\n  trigger_IO_flush();\n}',
     children: ['house_of_apple', 'house_of_orange'],
+    difficulty: 'expert',
+    practiceLinks: [
+      { name: 'how2heap: House of Orange', url: 'https://github.com/shellphish/how2heap/blob/master/glibc_2.23/house_of_orange.c', platform: 'github' },
+      { name: 'FSOP Glibc 2.35+', url: 'https://github.com/ptr-yudai/ptrlib/blob/master/ctfbox/techniques/fsop.py', platform: 'github' },
+    ],
+    commonPitfalls: [
+      'Glibc 2.34+ removed __free_hook and __malloc_hook — must target _IO_FILE vtables instead',
+      'vtable pointer checks (glibc 2.24+) — _IO_vtable_check() validates vtable location, must use correct _IO_wfile_jumps range',
+      'Wrong _IO_FILE field offsets — different glibc versions have different struct layouts',
+      'forgetting to set _IO_USER_LOCK or flags correctly for wide-char path to trigger',
+    ],
   },
 
   house_of_apple: {
@@ -1297,15 +1451,26 @@ continue
     id: 'sandbox_escape',
     name: 'Sandbox Escape',
     category: 'recon',
-    stack: [],
+    stack: ['kernel-exploit', 'privesc', 'rop'],
     format: [],
-    heap: [],
-    sandbox: ['sandbox-escape'],
+    heap: ['heap-overflow', 'uaf', 'kmalloc'],
+    sandbox: ['sandbox-escape', 'container-escape', 'kernel-exploit', 'seccomp-bypass', 'namespace-escape'],
     description: 'Breaks out of restricted execution environments (browsers, containers)',
     prerequisites: ['Sandbox architecture knowledge', 'IPC vulnerabilities'],
     constraints: ['Mitigation bypass required', 'Privilege escalation needed'],
     blueprint: 'sandbox_escape() {\n  const vuln = find_ipc_vulnerability();\n  escalate_privileges();\n  break_out_of_sandbox();\n}',
     children: ['privilege_escalation', 'ipc_exploit', 'dirty_cow', 'modprobe_path', 'ebpf_exploit'],
+    difficulty: 'expert',
+    practiceLinks: [
+      { name: 'Pwn College: Kernel Exploitation', url: 'https://pwn.college/systems-security/kernel-exploitation', platform: 'pwn-college' },
+      { name: 'Kernel Exploitation Roadmap', url: 'https://github.com/xairy/kernel-exploitation', platform: 'github' },
+    ],
+    commonPitfalls: [
+      'SMEP/SMAP blocking ret2usr — must use kernel ROP, not direct user-space code execution',
+      'KASLR — kernel base unknown, need to leak via /proc/kallsyms or heap spray',
+      'Wrong kernel version assumptions — each CVE is target-specific',
+      'Forgetting KPTI — user space page tables isolated, need swapgs + iretq to return cleanly',
+    ],
   },
 
   privilege_escalation: {

@@ -227,6 +227,83 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
                 <p className="text-gray-300 text-sm">{kbEntry.class}</p>
               </div>
 
+              {selectedNode.difficulty && (
+                <div className="pwn-card">
+                  <p className="pwn-card-title">Difficulty</p>
+                  <span className={`inline-flex px-2.5 py-1 rounded-md text-xs font-semibold ${
+                    selectedNode.difficulty === 'beginner' ? 'bg-emerald-900/30 text-emerald-300 border border-emerald-500/30' :
+                    selectedNode.difficulty === 'intermediate' ? 'bg-orange-900/30 text-orange-300 border border-orange-500/30' :
+                    'bg-red-900/30 text-red-300 border border-red-500/30'
+                  }`}>
+                    {selectedNode.difficulty.charAt(0).toUpperCase() + selectedNode.difficulty.slice(1)}
+                  </span>
+                </div>
+              )}
+
+              {(selectedNode.stack?.length > 0 || selectedNode.format?.length > 0 || selectedNode.heap?.length > 0 || selectedNode.sandbox?.length > 0) && (
+                <div className="pwn-card">
+                  <p className="pwn-card-title">Vulnerability Tags</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedNode.stack?.map(tag => (
+                      <span key={`stack-${tag}`} className="px-2 py-0.5 bg-emerald-900/20 text-emerald-300 text-xs rounded-md border border-emerald-500/20">{tag}</span>
+                    ))}
+                    {selectedNode.format?.map(tag => (
+                      <span key={`format-${tag}`} className="px-2 py-0.5 bg-amber-900/20 text-amber-300 text-xs rounded-md border border-amber-500/20">{tag}</span>
+                    ))}
+                    {selectedNode.heap?.map(tag => (
+                      <span key={`heap-${tag}`} className="px-2 py-0.5 bg-cyan-900/20 text-cyan-300 text-xs rounded-md border border-cyan-500/20">{tag}</span>
+                    ))}
+                    {selectedNode.sandbox?.map(tag => (
+                      <span key={`sandbox-${tag}`} className="px-2 py-0.5 bg-rose-900/20 text-rose-300 text-xs rounded-md border border-rose-500/20">{tag}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {selectedNode.practiceLinks && selectedNode.practiceLinks.length > 0 && (
+                <div className="pwn-card space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    <Flag size={12} className="text-cyan-400" />
+                    <p className="pwn-card-title mb-0">Practice This</p>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    {selectedNode.practiceLinks.map((link, idx) => (
+                      <a
+                        key={idx}
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-2 px-3 py-2 bg-slate-800/50 hover:bg-slate-700/50 rounded-md border border-slate-700/50 hover:border-cyan-500/30 transition-all group"
+                      >
+                        {link.platform === 'pwn-college' && <BookOpen size={12} className="text-emerald-400 flex-shrink-0" />}
+                        {link.platform === 'github' && <Github size={12} className="text-blue-400 flex-shrink-0" />}
+                        {link.platform === 'ctf-writeup' && <FileText size={12} className="text-amber-400 flex-shrink-0" />}
+                        {link.platform === 'paper' && <Database size={12} className="text-purple-400 flex-shrink-0" />}
+                        <span className="text-gray-200 text-sm group-hover:text-cyan-300 transition-colors">{link.name}</span>
+                        <ExternalLink size={10} className="text-gray-500 group-hover:text-cyan-400 ml-auto transition-colors" />
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {selectedNode.commonPitfalls && selectedNode.commonPitfalls.length > 0 && (
+                <div className="pwn-card space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    <AlertCircle size={12} className="text-rose-400" />
+                    <p className="pwn-card-title mb-0">Common Pitfalls</p>
+                  </div>
+                  <ul className="space-y-2">
+                    {selectedNode.commonPitfalls.map((pitfall, idx) => (
+                      <li key={idx} className="flex gap-2 text-gray-300 text-sm">
+                        <span className="text-rose-400 flex-shrink-0 mt-0.5">⚠</span>
+                        <span>{pitfall}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {/* Next Steps */}
               {nextSteps.length > 0 && (
                 <div className="pwn-card">
@@ -564,6 +641,83 @@ export function PwnInspector({ selectedNode, reconTags = new Set(), onReconTagsC
           return (
             <div className="pwn-section space-y-4">
               <p className="pwn-section-content">{selectedNode.description}</p>
+
+              {selectedNode.difficulty && (
+                <div className="pwn-card">
+                  <p className="pwn-card-title">Difficulty</p>
+                  <span className={`inline-flex px-2.5 py-1 rounded-md text-xs font-semibold ${
+                    selectedNode.difficulty === 'beginner' ? 'bg-emerald-900/30 text-emerald-300 border border-emerald-500/30' :
+                    selectedNode.difficulty === 'intermediate' ? 'bg-orange-900/30 text-orange-300 border border-orange-500/30' :
+                    'bg-red-900/30 text-red-300 border border-red-500/30'
+                  }`}>
+                    {selectedNode.difficulty.charAt(0).toUpperCase() + selectedNode.difficulty.slice(1)}
+                  </span>
+                </div>
+              )}
+
+              {(selectedNode.stack?.length > 0 || selectedNode.format?.length > 0 || selectedNode.heap?.length > 0 || selectedNode.sandbox?.length > 0) && (
+                <div className="pwn-card">
+                  <p className="pwn-card-title">Vulnerability Tags</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedNode.stack?.map(tag => (
+                      <span key={`stack-${tag}`} className="px-2 py-0.5 bg-emerald-900/20 text-emerald-300 text-xs rounded-md border border-emerald-500/20">{tag}</span>
+                    ))}
+                    {selectedNode.format?.map(tag => (
+                      <span key={`format-${tag}`} className="px-2 py-0.5 bg-amber-900/20 text-amber-300 text-xs rounded-md border border-amber-500/20">{tag}</span>
+                    ))}
+                    {selectedNode.heap?.map(tag => (
+                      <span key={`heap-${tag}`} className="px-2 py-0.5 bg-cyan-900/20 text-cyan-300 text-xs rounded-md border border-cyan-500/20">{tag}</span>
+                    ))}
+                    {selectedNode.sandbox?.map(tag => (
+                      <span key={`sandbox-${tag}`} className="px-2 py-0.5 bg-rose-900/20 text-rose-300 text-xs rounded-md border border-rose-500/20">{tag}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {selectedNode.practiceLinks && selectedNode.practiceLinks.length > 0 && (
+                <div className="pwn-card space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    <Flag size={12} className="text-cyan-400" />
+                    <p className="pwn-card-title mb-0">Practice This</p>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    {selectedNode.practiceLinks.map((link, idx) => (
+                      <a
+                        key={idx}
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-2 px-3 py-2 bg-slate-800/50 hover:bg-slate-700/50 rounded-md border border-slate-700/50 hover:border-cyan-500/30 transition-all group"
+                      >
+                        {link.platform === 'pwn-college' && <BookOpen size={12} className="text-emerald-400 flex-shrink-0" />}
+                        {link.platform === 'github' && <Github size={12} className="text-blue-400 flex-shrink-0" />}
+                        {link.platform === 'ctf-writeup' && <FileText size={12} className="text-amber-400 flex-shrink-0" />}
+                        {link.platform === 'paper' && <Database size={12} className="text-purple-400 flex-shrink-0" />}
+                        <span className="text-gray-200 text-sm group-hover:text-cyan-300 transition-colors">{link.name}</span>
+                        <ExternalLink size={10} className="text-gray-500 group-hover:text-cyan-400 ml-auto transition-colors" />
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {selectedNode.commonPitfalls && selectedNode.commonPitfalls.length > 0 && (
+                <div className="pwn-card space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    <AlertCircle size={12} className="text-rose-400" />
+                    <p className="pwn-card-title mb-0">Common Pitfalls</p>
+                  </div>
+                  <ul className="space-y-2">
+                    {selectedNode.commonPitfalls.map((pitfall, idx) => (
+                      <li key={idx} className="flex gap-2 text-gray-300 text-sm">
+                        <span className="text-rose-400 flex-shrink-0 mt-0.5">⚠</span>
+                        <span>{pitfall}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {/* Next Steps for non-KB nodes */}
               {nextSteps.length > 0 && (
